@@ -1,7 +1,7 @@
 Proyecto: Herramienta de Pruebas de Vulnerabilidades Web (Mini-Burp)
 Materia: Ingeniería de Software 2
 
-Estudiante: [Tu Nombre]
+Estudiantes: Diogo Nicolas Rodriguez Gomez, Javier Soliz Rueda
 
 Stack Tecnológico: Python 3.x, CustomTkinter, Sockets, Threading.
 
@@ -117,4 +117,39 @@ class ProxyServer:
 5. Manejo de Errores
 No uses except: pass. Siempre especifica el tipo de error que esperas capturar (ej. except socket.error as e:).
 
-Usa bloques try/except/finally para asegurar que los recursos (como las conexiones de red) se cierren correctamente.    
+Usa bloques try/except/finally para asegurar que los recursos (como las conexiones de red) se cierren correctamente.
+
+6. Tamaño Máximo Recomendado por Archivo
+Un archivo de código Python no debería superar las 400-500 líneas de código efectivo (sin contar líneas en blanco ni comentarios). Esta regla aplica para todos los módulos del proyecto.
+
+Por qué es importante:
+- Archivos largos son difíciles de leer, mantener y revisar en equipo.
+- Un archivo que crece más de 500 líneas generalmente es señal de que tiene demasiadas responsabilidades (violación del Principio de Responsabilidad Única - SRP).
+- Facilita la navegación en el editor y la búsqueda de errores durante debugging.
+
+Guía práctica por tipo de archivo:
+
+Tipo de archivo,Límite recomendado,Límite máximo absoluto
+Módulo de lógica (proxy, history, etc.),200-300 líneas,500 líneas
+Archivo de UI / Interfaz gráfica,300-400 líneas,600 líneas
+Archivo de tests,Sin límite estricto,Separar en varios archivos si supera 600 líneas
+Archivo de utilidades (utils.py),100-200 líneas,300 líneas
+Punto de entrada (main.py),Máximo 50 líneas,100 líneas
+
+Referencia: PEP 8 no establece un límite absoluto de líneas por archivo, pero la comunidad Python y herramientas como flake8 siguen la regla de mantener módulos pequeños y cohesivos.
+
+
+3. Tipo de Aplicación — Herramienta de Escritorio Instalable
+Mini-Burp Suite está diseñada como una aplicación de escritorio nativa para Windows, instalable directamente en el equipo del usuario sin necesidad de un navegador ni conexión a internet para funcionar.
+
+Características de la distribución:
+- La herramienta se empaqueta como un ejecutable (.exe) usando PyInstaller, lo que permite instalarla en el escritorio sin que el usuario final necesite tener Python instalado.
+- Al ejecutarse, abre una ventana gráfica de escritorio (construida con CustomTkinter) que presenta la interfaz de intercepción, historial y análisis.
+- No depende de servidores externos: toda la lógica corre localmente en la máquina del usuario.
+- El proxy escucha en localhost (127.0.0.1), por lo que el navegador debe configurarse manualmente para apuntar a él.
+
+Comando para generar el ejecutable (una vez finalizado el desarrollo):
+
+pyinstaller --onefile --windowed --name MiniburpSuite main.py
+
+Esto genera un archivo dist/MiniburpSuite.exe que puede copiarse al escritorio y ejecutarse directamente con doble clic.

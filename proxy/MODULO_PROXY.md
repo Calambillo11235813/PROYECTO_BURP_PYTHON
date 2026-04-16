@@ -1,165 +1,124 @@
-# Módulo `proxy` — HTTP Interceptor
-**Ingeniería de Software 2 | Herramienta de Pentesting tipo Burp Suite**
+# Módulo A — Interceptor Proxy (Core)
+**Ingeniería de Software 2 | Mini-Burp Suite**  
+**Estado: ✅ COMPLETO** — 4/4 casos de uso implementados
 
 ---
 
-## ¿Qué hace este módulo?
+## Descripción General
 
-Este módulo implementa un **Proxy HTTP interceptor** desde cero usando únicamente las librerías
-estándar de Python `socket` y `threading`. Su función principal es:
-
-> Posicionarse **entre el navegador y el servidor**, recibir cada petición HTTP/HTTPS,
-> imprimirla en consola (interceptación), y reenviarla transparentemente al destino original.
-
-En la práctica, al levantar `python main.py` y configurar Edge con el proxy `127.0.0.1:8080`,
-**todo el tráfico del navegador pasa por aquí** — exactamente como funciona Burp Suite.
-
----
-
-## Archivos del módulo
+El Módulo A es el núcleo de la herramienta. Gestiona la **capa de red de bajo nivel** usando únicamente las librerías estándar de Python `socket` y `threading`, sin frameworks externos. Se posiciona como intermediario entre el navegador del usuario y el servidor web destino, capturando, analizando y opcionalmente modificando todo el tráfico HTTP en tiempo real.
 
 ```
-proxy/
-├── __init__.py         ← Expone ProxyServer al resto del proyecto
-└── proxy_server.py     ← Toda la lógica (420 líneas)
+[Navegador / Edge]
+       │  TCP connect → 127.0.0.1:8080
+       ▼
+[ProxyServer — server.py]          ← acepta la conexión
+       │  lanza Thread por conexión
+       ▼
+[ConnectionHandler — handler.py]   ← procesa la petición
+       │
+       ├─► [parser.py]             ← descompone los bytes HTTP
+       ├─► [history.py]            ← guarda el registro (CU-03)
+       ├─► [InterceptController]   ← pausa si intercept ON (CU-04)
+       │
+       └─► Socket al servidor real → respuesta → navegador
 ```
 
 ---
 
-## Clase `ProxyServer`
+## Archivos del Módulo
 
-### Atributos de instancia
-
-| Atributo | Tipo | Descripción |
+| Archivo                 | Responsabilidad principal                      | CU que implementa |
 |---|---|---|
-| `host` | `str` | IP donde escucha el proxy (`127.0.0.1` por defecto) |
-| `port` | `int` | Puerto del proxy (`8080` por defecto) |
-| `_server_socket` | `socket.socket` | Socket TCP del servidor (el que acepta conexiones) |
-| `_running` | `bool` | Flag para el bucle principal; `False` al hacer `stop()` |
-| `_request_count` | `int` | Contador global de peticiones interceptadas |
-| `_lock` | `threading.Lock` | Mutex para proteger `_request_count` de race conditions |
-
-### Constantes globales
-
-```python
-PROXY_HOST        = "127.0.0.1"
-PROXY_PORT        = 8080
-BUFFER_SIZE       = 4096   # bytes leídos por recv() en cada llamada
-MAX_CONNECTIONS   = 10     # backlog del socket (cola de conexiones pendientes)
-CONNECTION_TIMEOUT = 10    # segundos sin datos → cierre del socket
-```
+| `proxy/server.py`       | Socket TCP: bind, listen, accept, lanzar hilos | CU-01           |
+| `proxy/handler.py`      | Procesamiento de cada conexión individual      | CU-02, CU-04    |
+| `proxy/history.py`      | Historial persistente, filtros y exportación   | CU-03           |
+| `logic/parser.py`       | Parseo de bytes HTTP → `ParsedRequest`         | CU-02 (soporte) |
+| `proxy/proxy_server.py` | Shim de compatibilidad (re-exporta `ProxyServer`) | — |
 
 ---
 
-## Métodos y su responsabilidad
-
-### `start()` — El corazón del servidor
-```
-socket() → bind() → listen() → [bucle] accept() → Thread(target=_handle_client)
-```
-Crea el socket TCP con `AF_INET + SOCK_STREAM`, lo enlaza al host:puerto y entra en
-un bucle infinito esperando conexiones. **Cada conexión aceptada lanza un hilo nuevo.**
-
-La opción `SO_REUSEADDR` es clave: permite reutilizar el puerto inmediatamente después
-de un `Ctrl+C`, sin esperar el tiempo de `TIME_WAIT` de TCP.
-
-```python
-self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-```
+## Casos de Uso
 
 ---
 
-### `_handle_client()` — Orquestador por hilo
-Ejecutado en su **propio hilo** para cada cliente. Coordina el flujo completo:
+### CU-01 — Configuración de Proxy
+> *El usuario define la IP y el puerto local para la escucha de tráfico.*
 
+**Archivo responsable:** `proxy/server.py` → clase `ProxyServer`
+
+#### ¿Qué hace?
+
+El usuario puede iniciar el proxy en cualquier dirección IP y puerto de su máquina. La configuración se realiza mediante argumentos de línea de comandos o directamente en el código. Antes de aceptar conexiones, el servidor:
+
+1. Crea un socket TCP (`AF_INET + SOCK_STREAM`).
+2. Aplica la opción `SO_REUSEADDR` para evitar errores de "puerto ocupado" al reiniciar rápidamente.
+3. Hace `bind()` a la IP y puerto configurados.
+4. Llama a `listen()` con un backlog de 10 conexiones pendientes.
+
+#### Interfaces de configuración
+
+```bash
+python main.py              # host=127.0.0.1  puerto=8080 (defecto)
+python main.py 9090         # host=127.0.0.1  puerto=9090
+python main.py 0.0.0.0 8080 # escucha en todas las interfaces de red
 ```
-recv → parse → log (interceptar) → forward / tunnel
-```
-
-Maneja excepciones de forma silenciosa (`socket.timeout`, `ConnectionResetError`)
-para que un cliente roto no derribe al servidor completo. El `finally` siempre
-cierra el socket del cliente.
-
----
-
-### `_receive_all()` — Lectura completa del socket
 
 ```python
-while True:
-    chunk = sock.recv(BUFFER_SIZE)   # lee hasta 4096 bytes
-    data += chunk
-    if len(chunk) < BUFFER_SIZE:
-        break                        # probablemente no hay más datos
+# Desde código:
+proxy = ProxyServer(host="127.0.0.1", port=8080)
 ```
 
-`recv()` no garantiza leer todos los datos en una sola llamada (el kernel puede
-fragmentarlos). Este método acumula chunks hasta que el socket deja de enviar.
+#### Configurar el navegador (Microsoft Edge)
 
----
-
-### `_parse_request()` — Disección de la petición HTTP
-
-Toma los bytes crudos y devuelve la tupla:
-```python
-(method, host, port, path, headers_dict, body)
+```
+Settings → System and performance → Open proxy settings
+→ Activar "Use a proxy server"
+→ Address: 127.0.0.1   Port: 8080
 ```
 
-Maneja tres casos:
+#### Constantes relevantes en `server.py`
 
-| Caso | Ejemplo | Comportamiento |
+| Constante | Valor | Descripción   |
 |---|---|---|
-| `CONNECT` | `CONNECT www.bing.com:443 HTTP/1.1` | Extrae host:puerto para tunnel HTTPS |
-| URL absoluta | `GET http://example.com/path HTTP/1.1` | Parsea scheme + host + port + path |
-| URL relativa | `GET /path HTTP/1.1` | Busca el host en la cabecera `Host:` |
-
-Las cabeceras se devuelven como `dict` para facilitar su inspección:
-```python
-{"Host": "example.com", "User-Agent": "Mozilla/5.0...", "Authorization": "Bearer ..."}
-```
+| `PROXY_HOST`      | `"127.0.0.1"` | IP de escucha por defecto |
+| `PROXY_PORT`      | `8080`        | Puerto por defecto |
+| `MAX_CONNECTIONS` | `10`          | Backlog del socket (conexiones en cola) |
 
 ---
 
-### `_forward_request()` — Reenvío HTTP
+### CU-02 — Intercepción de Peticiones
+> *Captura automática de peticiones salientes del navegador.*
 
-Abre un **segundo socket TCP** hacia el servidor real, manda la petición original
-byte a byte y devuelve la respuesta completa. El proxy es completamente transparente:
-el servidor destino ve la petición como si viniera del navegador directamente.
+**Archivos responsables:**
+- `proxy/server.py` → bucle `accept()` + lanzamiento de hilos
+- `proxy/handler.py` → `ConnectionHandler.handle()` + `_receive_all()` + `_forward_request()` + `_handle_https_tunnel()`
+- `logic/parser.py` → `parse_request()` + `ParsedRequest`
 
-```
-[Edge] →(socket A)→ [ProxyServer] →(socket B)→ [Servidor real]
-```
+#### ¿Qué hace?
 
----
-
-### `_handle_https_tunnel()` — Tunnel HTTPS (método CONNECT)
-
-Cuando el navegador quiere conectarse a un sitio HTTPS, el proxy NO puede leer
-el contenido porque está cifrado con TLS. El flujo es:
+Cada vez que el navegador abre una conexión TCP al proxy, `server.py` la acepta y lanza un **hilo independiente** (`threading.Thread`) que ejecuta `ConnectionHandler.handle()`. Este método orquesta el ciclo completo:
 
 ```
-1. Edge envía:   CONNECT www.bing.com:443 HTTP/1.1
-2. Proxy abre socket TCP hacia www.bing.com:443
-3. Proxy responde: HTTP/1.1 200 Connection Established
-4. A partir de aquí, el proxy retransmite bytes en ambas direcciones (relay)
+recv_all()          ← lee bytes crudos del socket del navegador
+parse_request()     ← descompone la petición (método, host, port, path, headers, body)
+_log_request()      ← imprime en consola con colores ANSI
+─────────────────────────────────────────────────────────
+HTTP:   _forward_request()       ← abre socket al servidor real y reenvía
+HTTPS:  _handle_https_tunnel()   ← relay TCP bidireccional (método CONNECT)
+─────────────────────────────────────────────────────────
+_log_response()     ← imprime status code de la respuesta
+sendall()           ← envía la respuesta de vuelta al navegador
 ```
 
-El relay bidireccional se implementa con **2 hilos adicionales**:
+#### Soporte de protocolos
 
-```python
-t1 = Thread(target=relay, args=(client_socket, server_socket))  # Edge → Bing
-t2 = Thread(target=relay, args=(server_socket, client_socket))  # Bing → Edge
-```
+| Protocolo | Método HTTP             | Comportamiento |
+|---|---|---|
+| HTTP      | GET, POST, PUT, DELETE… | Lee, imprime y reenvía completamente |
+| HTTPS     | CONNECT                 | Tunnel TCP bidireccional (no descifra TLS) |
 
-> **Nota de pentesting:** Esta implementación hace un tunnel *opaco* (no descifra TLS).
-> Herramientas como Burp Suite van un paso más allá: hacen un **SSL MITM** generando
-> un certificado falso firmado por su propia CA para poder leer el HTTPS también.
-
----
-
-### `_log_request()` / `_log_response()` — La interceptación visible
-
-Son los métodos que muestran el tráfico en consola con colores ANSI.
-Esto es lo que vemos cuando Edge hace conexiones:
+#### Output en consola (ejemplo real con Edge)
 
 ```
 ────────────────────────────────────────────────────────────
@@ -168,82 +127,178 @@ CONNECT www.bing.com:443
 ────────────────────────────────────────────────────────────
 CONNECT www.bing.com:443 HTTP/1.1
 Host: www.bing.com:443
-User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/147.0.0.0
+User-Agent: Mozilla/5.0 ... Edg/147.0.0.0
+
+[#40] Túnel HTTPS establecido → www.bing.com:443
 ```
 
-Las respuestas largas se truncan a 1500 caracteres para no saturar la consola.
-
----
-
-## Flujo completo de una petición
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Microsoft Edge (127.0.0.1:8080 configurado como proxy)         │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │  TCP connect a 127.0.0.1:8080
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  ProxyServer.start()  ←  server_socket.accept()                 │
-│                                                                  │
-│  Lanza Thread #N  ─────► _handle_client(client_socket)          │
-│                               │                                  │
-│                          _receive_all()      ← lee bytes crudos  │
-│                          _parse_request()    ← disecciona HTTP   │
-│                          _log_request()      ← INTERCEPTACIÓN ✓  │
-│                               │                                  │
-│                    ┌──────────┴──────────┐                       │
-│                    │ HTTP                │ HTTPS (CONNECT)        │
-│                    ▼                    ▼                        │
-│            _forward_request()   _handle_https_tunnel()           │
-│            (socket al dest.)    (relay TCP bidireccional)        │
-│                    │                    │                        │
-│            _log_response()      "200 Connection Established"     │
-│            sendall() al Edge    + 2 hilos relay                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Threading: por qué se necesita
-
-| Sin threading | Con threading |
-|---|---|
-| `accept()` bloquea hasta que llega **una** conexión | `accept()` lanza un hilo y vuelve a escuchar **inmediatamente** |
-| El proxy atiende **1 petición a la vez** | El proxy atiende **N peticiones en paralelo** |
-| Edge hace ~40 conexiones simultáneas → timeout | Edge funciona fluidamente |
-
-El `threading.Lock` en `_handle_client()` es necesario porque múltiples hilos
-podrían intentar incrementar `_request_count` al mismo tiempo → **race condition**:
+#### `ParsedRequest` — resultado del parseo
 
 ```python
-with self._lock:          # solo un hilo entra a la vez
-    self._request_count += 1
-    req_id = self._request_count
+@dataclass
+class ParsedRequest:
+    method  : str           # "GET", "POST", "CONNECT", …
+    host    : str           # "www.google.com"
+    port    : int           # 80 (HTTP), 443 (HTTPS)
+    path    : str           # "/api/search"
+    headers : dict          # {"Host": "...", "User-Agent": "...", ...}
+    body    : bytes         # b"param=value" (vacío en GETs)
+```
+
+#### Threading: por qué un hilo por conexión
+
+El navegador moderno (Edge) abre **decenas de conexiones simultáneas**. Si el proxy procesara una a la vez, el navegador sufriría timeouts. Al lanzar un `Thread(daemon=True)` por conexión, el bucle `accept()` principal nunca se bloquea. El `threading.Lock` en `ConnectionHandler._next_id()` garantiza que el contador de peticiones no tenga race conditions.
+
+---
+
+### CU-03 — Visualización de Historial (Logs)
+> *Registro tabular de todas las peticiones con sus códigos de respuesta.*
+
+**Archivo responsable:** `proxy/history.py` → clases `RequestRecord` y `History`
+
+#### ¿Qué hace?
+
+Cada petición procesada por el proxy se almacena en memoria como un `RequestRecord`. El historial es accesible en cualquier momento y soporta filtros combinables y exportación a archivos.
+
+#### `RequestRecord` — qué se guarda por petición
+
+| Campo | Tipo | Ejemplo |
+|---|---|---|
+| `id` | `int` | `42` |
+| `timestamp` | `datetime` | `2026-04-16 22:39:36` |
+| `method` | `str` | `"GET"` |
+| `host` | `str` | `"httpbin.org"` |
+| `port` | `int` | `80` |
+| `path` | `str` | `"/get"` |
+| `headers` | `dict` | `{"Host": "httpbin.org", ...}` |
+| `body` | `bytes` | `b"username=admin&..."` |
+| `response_status` | `str` | `"HTTP/1.1 200 OK"` |
+| `duration_ms` | `float` | `142.7` |
+| `client_ip` | `str` | `"127.0.0.1"` |
+
+#### API de la clase `History`
+
+```python
+# Ver en consola
+proxy.history.print_table()
+
+# Filtros (combinables entre sí)
+proxy.history.filter(method="POST")
+proxy.history.filter(host="google")
+proxy.history.filter(status_code=404)
+proxy.history.filter(min_status=400, max_status=499)   # rango de errores 4xx
+proxy.history.filter(method="POST", host="api.target.com", min_status=200)
+
+# Buscar por ID
+proxy.history.get_by_id(42)
+
+# Exportar
+proxy.history.export_txt("reports/historial.txt")   # tabla legible
+proxy.history.export_csv("reports/historial.csv")   # compatible con Excel/pandas
+
+# Exportar subconjunto filtrado
+errores = proxy.history.filter(min_status=500)
+proxy.history.export_csv("reports/errores_500.csv", records=errores)
+
+# Limpiar
+proxy.history.clear()
+```
+
+#### Thread-safety
+
+`History` usa un `threading.RLock` (reentrant lock) para que múltiples hilos de `ConnectionHandler` puedan agregar registros simultáneamente sin corrupción de datos.
+
+---
+
+### CU-04 — Modificación en Tiempo Real
+> *Interrupción del tráfico para editar cabeceras o parámetros antes del envío.*
+
+**Archivo responsable:** `proxy/handler.py` → clases `InterceptController` y `PendingRequest`
+
+#### ¿Qué hace?
+
+Cuando el modo intercept está activo (`intercept_enabled = True`), el proxy **pausa** cada petición HTTP antes de reenviarla al servidor. El hilo del handler queda bloqueado esperando una decisión externa (de la GUI o de la CLI). La decisión puede ser:
+
+- **`forward`** — reenviar la petición original o una versión modificada.
+- **`drop`** — descartar la petición (el navegador recibe un `403 Forbidden`).
+
+#### Mecanismo: `threading.Event` + `Queue`
+
+```
+[Hilo del handler]                    [GUI / CLI — hilo principal]
+        │                                          │
+        │  intercept.intercept(id, raw, parsed)    │
+        │─── crea PendingRequest ──────────────────►│
+        │    └── encola en Queue                    │
+        │                                          │
+        │  pending.wait(timeout=60s)  ◄────────────│  pend = intercept.next_pending()
+        │  [BLOQUEADO en Event]        │            │  pend.forward(modified_raw)
+        │                              │            │  ó pend.drop()
+        │  ◄── Event.set() ────────────┘            │
+        │                                          │
+        │  decision, final_raw = ("forward", raw)  │
+        │  → _forward_request(...)                  │
+```
+
+#### Uso desde código
+
+```python
+# Activar intercepción
+proxy = ProxyServer()
+proxy.intercept.enable()
+proxy.start()   # en un hilo separado
+
+# Desde la GUI (bucle de eventos):
+pending = proxy.intercept.next_pending()   # None si no hay peticiones en espera
+if pending:
+    print(pending.raw.decode())            # mostrar la petición al usuario
+    modified = editar_en_gui(pending.raw)  # el usuario edita
+    pending.forward(modified)              # reenviar modificada
+    # ó
+    pending.drop()                         # descartar
+```
+
+#### `PendingRequest` — campos accesibles desde la GUI
+
+| Campo/Método | Descripción |
+|---|---|
+| `pending.id` | ID secuencial de la petición |
+| `pending.raw` | Bytes crudos originales (editable) |
+| `pending.parsed` | `ParsedRequest` con método, host, path, headers, body |
+| `pending.forward(modified_raw)` | Libera el hilo con decisión "reenviar" |
+| `pending.drop()` | Libera el hilo con decisión "descartar" |
+| `pending.wait(timeout)` | Bloquea el hilo hasta recibir decisión |
+
+#### Timeout de seguridad
+
+Si la GUI/CLI no resuelve la petición en 60 segundos, el hilo del handler se desbloquea automáticamente y reenvía la petición original. Esto evita que el navegador quede colgado indefinidamente.
+
+```python
+decision, final_raw = pending.wait(timeout=60.0)
+# decision == "timeout" → se usa el raw original
 ```
 
 ---
 
-## Lo que vimos en tiempo real con Edge
+## Resumen de Implementación
 
-Edge no es un navegador "simple" — hace **decenas de conexiones en paralelo**:
+| CU    | Clase principal                          | Métodos clave | Tests |
+|---    |                                       ---|            ---|    ---|
+| CU-01 | `ProxyServer`                            | `__init__`, `start`, `stop` | `TestProxyInit` (5 tests) |
+| CU-02 | `ConnectionHandler`                      | `handle`, `_receive_all`, `_forward_request`, `_handle_https_tunnel` | `TestParseRequest` (6 tests) |
+| CU-03 | `History` + `RequestRecord`              | `add`, `filter`, `export_txt`, `export_csv`, `print_table` | `TestHistory` (20) + `TestRequestRecord` (10) |
+| CU-04 | `InterceptController` + `PendingRequest` | `enable`, `disable`, `intercept`, `next_pending`, `forward`, `drop`, `wait` | `TestInterceptController` (9 tests) |
 
-| Destino interceptado | Propósito |
-|---|---|
-| `www.bing.com:443` | Motor de búsqueda predeterminado de Edge |
-| `functional.events.data.microsoft.com:443` | Telemetría / analytics de Microsoft |
-| Otros dominios microsoft.com | Sincronización, actualizaciones, servicios |
-
-Todo esto llega como `CONNECT` porque Edge usa HTTPS. El proxy los maneja transparentemente
-con `_handle_https_tunnel()` y el navegador funciona con normalidad.
+**Total de tests del Módulo A: ~50 tests — todos passing ✅**
 
 ---
 
-## Posibles extensiones (para el parcial / proyecto)
+## Próxima Extensión Propuesta: SSL MITM
 
-- [ ] **SSL MITM**: Interceptar y descifrar HTTPS generando certificados dinámicos con `cryptography`
-- [ ] **Filtro de peticiones**: Interceptar solo ciertas URLs (regex sobre el host/path)
-- [ ] **Modificar peticiones**: Cambiar cabeceras o cuerpo antes del reenvío
-- [ ] **GUI**: Mostrar las peticiones en una interfaz gráfica (tkinter o web)
-- [ ] **Guardar tráfico**: Exportar peticiones a archivos `.txt` o `.har`
-- [ ] **Repetidor**: Reenviar manualmente una petición modificada (como el Repeater de Burp)
+El Módulo A actualmente hace un **tunnel transparente** para HTTPS (no descifra TLS). Para interceptar tráfico HTTPS como lo hace Burp Suite se necesitaría:
+
+1. Generar una CA (Certificate Authority) propia con la librería `cryptography`.
+2. En `_handle_https_tunnel()`, en lugar de hacer relay TCP, hacer un handshake TLS con el servidor real y otro con el navegador usando un certificado falso firmado por la CA.
+3. Instalar la CA en el navegador para que confíe en los certificados generados.
+
+Esta extensión correspondería al **Módulo A v2.0** y es el camino natural hacia un Burp Suite completo.
