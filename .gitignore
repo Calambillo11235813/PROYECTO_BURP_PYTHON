@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Directorio de entorno virtual (si se usa en el futuro)
+venv/
+env/
+.venv/
+
+# IDEs y Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Directorios de test (reportes de coverage, etc.)
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/
+
+# OS cache
+.DS_Store
+Thumbs.db
+
+# Historial exportado (CSV / TXT)
+*.csv
+*.txt
+!requirements.txt  # (si se crea se debe ignorar la regla de arriba)

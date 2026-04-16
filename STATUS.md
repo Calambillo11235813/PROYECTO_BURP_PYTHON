@@ -9,11 +9,11 @@
 
 | Módulo | Casos de Uso | Implementados | Pendientes | Estado |
 |---|:---:|:---:|:---:|---|
-| **A — Interceptor Proxy (Core)** | 4 | 3 | 1 | 🟡 En progreso |
+| **A — Interceptor Proxy (Core)** | 4 | 4 | 0 | ✅ Completo |
 | **B — Repeater** | 3 | 0 | 3 | 🔴 No iniciado |
 | **C — Intruder (Fuzzing)** | 3 | 0 | 3 | 🔴 No iniciado |
 | **D — Reporting & Analysis** | 2 | 0 | 2 | 🔴 No iniciado |
-| **Tests unitarios** | — | 39 tests | — | ✅ Pasando |
+| **Tests unitarios** | — | 50 tests | — | ✅ Pasando |
 
 ---
 
@@ -90,15 +90,16 @@ proxy.history.export_txt("reports/historial.txt")    # exportar legible
 ### CU-04 · Modificación en Tiempo Real
 > Interrupción del tráfico para editar cabeceras o parámetros antes del envío.
 
-**Estado: ❌ NO IMPLEMENTADO**
+**Estado: ✅ IMPLEMENTADO**
 
-- [ ] Modo "intercept ON/OFF" (pausa la petición antes de reenviarla)
-- [ ] Interfaz (CLI o GUI) para editar la petición pausada
-- [ ] Reenvío de la petición modificada al servidor
-- [ ] Opción de descartar la petición
+- [x] Modo "intercept ON/OFF" (pausa la petición antes de reenviarla) a través de `InterceptController`
+- [x] Gestión de peticiones pausadas mediante una `Queue` (cola FIFO) y `threading.Event`
+- [x] Interfaz Gráfica (`CustomTkinter`) para revisar la petición pausada y editarla
+- [x] Reenvío de la petición modificada al servidor mediante el botón "Forward"
+- [x] Opción de descartar la petición mediante el botón "Drop" (retorna un 403 local)
+- [x] Timeout de seguridad (60s) automático para no dejar colgado al navegador
 
-> 💡 Este CU requiere la GUI (`CustomTkinter`) o al menos una interfaz de edición
-> por consola con `input()`. Es el siguiente paso lógico tras terminar el core.
+> 💡 El Módulo A Core queda finalizado. Integramos todo en la pestaña `Proxy` de la interfaz gráfica recién creada.
 
 ---
 
@@ -154,41 +155,44 @@ proxy.history.export_txt("reports/historial.txt")    # exportar legible
 ### Implementado ✅
 ```
 PROYECTO_BURP_PYTHON/
-├── main.py                 ✅ Punto de entrada con args CLI
-├── test_proxy.py           ✅ 39 tests unitarios (todos passing)
+├── main.py                 ✅ Punto de entrada inicializa Proxy y GUI
+├── test_proxy.py           ✅ ~50 tests unitarios (todos passing)
 ├── README.md               ✅ Documentación de uso
 ├── Documentacion.md        ✅ Especificación del proyecto
 ├── STATUS.md               ✅ Este archivo
+├── .gitignore              ✅ Ignora temporales
 ├── proxy/
-│   ├── __init__.py         ✅ Paquete Python (expone ProxyServer, History, RequestRecord)
-│   ├── proxy_server.py     ✅ Clase ProxyServer (~440 líneas)
-│   ├── history.py          ✅ CU-03: RequestRecord + History (filtros + exportación)
-│   └── MODULO_PROXY.md     ✅ Documentación técnica del módulo
+│   ├── __init__.py         ✅ Paquete (expone servidor, handler, intercept, history)
+│   ├── server.py           ✅ Socket TCP de bajo nivel (accept loop)
+│   ├── handler.py          ✅ Procesa conexiones, túneles, delegación (CU-02, CU-04)
+│   ├── history.py          ✅ CU-03: historial persistente
+│   ├── proxy_server.py     ✅ Shim de compatibilidad backwards
+│   └── MODULO_PROXY.md     ✅ Doc extensa Módulo A
+├── logic/
+│   └── parser.py           ✅ Parseo puro de strings a dataclass de requests
+├── gui/                    ✅ Interfaz Gráfica (CustomTkinter)
+│   ├── __init__.py
+│   ├── app.py              ✅ App window y tab control
+│   ├── proxy_tab.py        ✅ UI Intercept, history table, txt view
+│   └── colors.py           ✅ Tokens de diseño del color oscuro
 └── tests/
-    ├── __init__.py         ✅ Paquete de tests
-    └── README.md           ✅ Convenciones y comandos
+    ├── __init__.py         ✅
+    └── README.md           ✅
 ```
 
 ### Pendiente ❌
 ```
 PROYECTO_BURP_PYTHON/
-├── proxy_core.py           ❌ (fusionado en proxy/proxy_server.py)
 ├── repeater.py             ❌
 ├── intruder.py             ❌
-├── gui/
-│   ├── app_ui.py           ❌
-│   ├── components.py       ❌
-│   └── themes.json         ❌
 ├── logic/
-│   ├── parser.py           ❌
 │   ├── scanner.py          ❌
 │   └── utils.py            ❌
 ├── payloads/
 │   ├── sqli.txt            ❌
 │   ├── xss.txt             ❌
 │   └── traversal.txt       ❌
-├── reports/                ❌ (directorio)
-└── requirements.txt        ❌
+└── reports/                ❌ (directorio)
 ```
 
 ---
@@ -249,8 +253,23 @@ PROYECTO_BURP_PYTHON/
 | `test_clear_empties_history` | `clear()` vacía el historial | ✅ OK |
 | `test_proxy_has_history_attribute` | `ProxyServer` integra `History` | ✅ OK |
 
+### CU-04 — `TestInterceptController` (11 tests nuevos)
+
+| Test | Descripción | Estado |
+|---|---|---|
+| `test_initially_disabled` | Flag inicial apagada | ✅ OK |
+| `test_no_pending_initially` | Cola vacía al instanciar | ✅ OK |
+| `test_enable_sets_flag` | `enable()` prende flag | ✅ OK |
+| `test_disable_clears_flag` | `disable()` apaga flag | ✅ OK |
+| `test_pending_forward_original` | Forward directo (sin args) | ✅ OK |
+| `test_pending_forward_modified` | Forward con contenido editado | ✅ OK |
+| `test_pending_drop` | Drop suelta hilo con 403 | ✅ OK |
+| `test_next_pending_returns_request` | Cola recupera petición FIFO | ✅ OK |
+| `test_pending_count_increments` | Incremento cuenta pendientes | ✅ OK |
+| `test_pending_timeout_returns_original` | Resuelve tras timeout largo | ✅ OK |
+
 ```
-Ran 39 tests in 0.004s — OK ✅
+Ran 50 tests in 0.04s — OK ✅
 ```
 
 ---
@@ -258,10 +277,8 @@ Ran 39 tests in 0.004s — OK ✅
 ## 🗺️ Próximos Pasos Sugeridos
 
 ```
-1. ✅ [Módulo A - CU-03] COMPLETADO — history.py con filtros y exportación
-2.    [Módulo A - CU-04] Modo intercept ON/OFF con edición por consola
-3.    [Módulo B]         Implementar repeater.py con clase Repeater
-4.    [GUI]              Interfaz CustomTkinter con tabla de historial (usa History)
-5.    [Módulo C]         Motor de fuzzing + diccionarios de payloads
-6.    [Módulo D]         Scanner pasivo de cabeceras inseguras
+1. ✅ [Módulo A] El CORE y GUI de intercepción han finalizado
+2.    [Módulo B] Implementar el tab 'Repeater' enviando peticiones del historial hacia él (clonar)
+3.    [Módulo B] UI 'Repeater' con dos paneles de texto (Request / Response). Funcionalidad de enviar al servidor
+4.    [Módulo C] Implementar intruder.py para pruebas fuzz y su tab (Intruder)
 ```
