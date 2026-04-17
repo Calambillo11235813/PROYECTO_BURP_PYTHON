@@ -21,6 +21,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
+from typing import Callable, Optional
 
 import customtkinter as ctk
 
@@ -49,11 +50,19 @@ class ProxyTab(ctk.CTkFrame):
         proxy (ProxyServer): Instancia del proxy ya iniciado.
     """
 
-    def __init__(self, master: tk.Widget, proxy: ProxyServer) -> None:
+    def __init__(
+        self,
+        master              : tk.Widget,
+        proxy               : ProxyServer,
+        on_send_to_repeater : Optional[Callable[[str], None]] = None,
+    ) -> None:
         super().__init__(master, fg_color="transparent")
         self.proxy    = proxy
         self._pending : PendingRequest | None = None  # petición interceptada activa
         self._seen_ids: set[int] = set()              # IDs ya pintados en la tabla
+        # Callback CU-05: llamado con el raw cuando el usuario hace
+        # clic en 'Send to Repeater'. Si es None, el botón se oculta.
+        self._repeater_callback = on_send_to_repeater
 
         self._build_control_bar()
         self._build_main_panel()
@@ -102,6 +111,25 @@ class ProxyTab(ctk.CTkFrame):
             text_color=TEXT_MUTED, font=ctk.CTkFont(size=12),
             corner_radius=6, command=self._export_csv,
         ).pack(side="left", padx=0, pady=9)
+
+        # Separador
+        tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", pady=8)
+
+        # Botón Send to Repeater — visible solo con fila seleccionada (CU-05)
+        self._btn_repeater = ctk.CTkButton(
+            bar,
+            text="🔁  Send to Repeater",
+            width=160, height=32,
+            fg_color="#1f3d5c",
+            hover_color="#1a3352",
+            border_color=ACCENT_BLUE,
+            border_width=1,
+            text_color=ACCENT_BLUE,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            corner_radius=6,
+            command=self._on_send_to_repeater,
+        )
+        # Se muestra al seleccionar una fila; inicialmente oculto
 
         # Contador de peticiones (derecha)
         self._count_lbl = ctk.CTkLabel(
@@ -306,6 +334,7 @@ class ProxyTab(ctk.CTkFrame):
 
         selected = self._tree.selection()
         if not selected:
+            self._btn_repeater.pack_forget()
             return
 
         values = self._tree.item(selected[0], "values")
@@ -319,6 +348,24 @@ class ProxyTab(ctk.CTkFrame):
             self._editor_lbl.configure(
                 text=f"📋 #{req_id}  {record.method}  {record.host}{record.path}"
             )
+            # Mostrar botón Send to Repeater si el callback está registrado
+            if self._repeater_callback is not None:
+                self._btn_repeater.pack(side="left", padx=8, pady=9)
+
+    def _on_send_to_repeater(self) -> None:
+        """
+        CU-05: Clona la petición seleccionada y la envía al Repeater.
+
+        Lee el contenido actual del editor (que ya tiene el raw de la fila
+        seleccionada) y llama al callback registrado en __init__.
+        El callback es App.switch_to_repeater(), que rellena el panel
+        Request del Repeater y cambia el foco a esa pestaña.
+        """
+        if self._repeater_callback is None:
+            return
+        raw_text = self._editor_box.get("1.0", "end-1c")
+        if raw_text.strip():
+            self._repeater_callback(raw_text)
 
     # ── Polling: actualizar tabla y revisar intercepción ──────────────────────
 

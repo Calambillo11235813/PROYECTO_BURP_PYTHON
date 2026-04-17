@@ -19,6 +19,7 @@ import customtkinter as ctk
 
 from proxy.server import ProxyServer
 from .proxy_tab import ProxyTab
+from .repeater_tab import RepeaterTab
 from .colors import (
     BG_DARK, BG_SECONDARY, ACCENT_BLUE, ACCENT_GREEN,
     ACCENT_RED, TEXT_PRIMARY, TEXT_MUTED, BORDER,
@@ -134,19 +135,16 @@ class App(ctk.CTk):
         self._proxy_tab = ProxyTab(
             master=self._tab_view.tab("  Proxy  "),
             proxy=self.proxy,
+            on_send_to_repeater=self.switch_to_repeater,
         )
         self._proxy_tab.pack(fill="both", expand=True)
 
-        # ── Pestaña Repeater (placeholder) ──────────────────────────────────
+        # ── Pestaña Repeater ──────────────────────────────────────────
         self._tab_view.add("  Repeater  ")
-        self._build_placeholder(
-            parent=self._tab_view.tab("  Repeater  "),
-            icon="🔁",
-            title="Repeater",
-            subtitle="Módulo B — Reenvío manual de peticiones",
-            detail="Permite clonar una petición del historial,\n"
-                   "editarla libremente y compararla con la respuesta original.",
+        self._repeater_tab = RepeaterTab(
+            master=self._tab_view.tab("  Repeater  "),
         )
+        self._repeater_tab.pack(fill="both", expand=True)
 
         # ── Pestaña Intruder (placeholder) ──────────────────────────────────
         self._tab_view.add("  Intruder  ")
@@ -158,6 +156,22 @@ class App(ctk.CTk):
             detail="Motor de ataque por diccionario para detectar\n"
                    "vulnerabilidades SQLi, XSS y Path Traversal.",
         )
+
+    # ── API pública de navegación entre pestañas ────────────────────────
+
+    def switch_to_repeater(self, raw_request: str) -> None:
+        """
+        Carga una petición en el Repeater y cambia el foco a esa pestaña (CU-05).
+
+        Llamado desde ProxyTab cuando el usuario hace clic en 'Send to Repeater'.
+
+        Args:
+            raw_request (str): Texto completo de la petición HTTP.
+        """
+        self._repeater_tab.load_request(raw_request)
+        self._tab_view.set("  Repeater  ")
+
+    # ── Placeholder (sólo para Intruder, aún no implementado) ───────────────
 
     def _build_placeholder(
         self,
