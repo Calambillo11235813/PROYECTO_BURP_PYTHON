@@ -1,7 +1,7 @@
 # 📊 STATUS DEL PROYECTO — Mini-Burp Suite
 **Materia:** Ingeniería de Software 2  
-**Última actualización:** 2026-04-16  
-**Stack:** Python 3.x · socket · threading · CustomTkinter (pendiente)
+**Última actualización:** 2026-04-20  
+**Stack:** Python 3.x · socket · threading · CustomTkinter · requests
 
 ---
 
@@ -10,8 +10,8 @@
 | Módulo | Casos de Uso | Implementados | Pendientes | Estado |
 |---|:---:|:---:|:---:|---|
 | **A — Interceptor Proxy (Core)** | 4 | 4 | 0 | ✅ Completo |
-| **B — Repeater** | 3 | 0 | 3 | 🔴 No iniciado |
-| **C — Intruder (Fuzzing)** | 3 | 0 | 3 | 🔴 No iniciado |
+| **B — Repeater** | 3 | 3 | 0 | ✅ Completo |
+| **C — Intruder (Fuzzing)** | 3 | 3 | 0 | ✅ Completo |
 | **D — Reporting & Analysis** | 2 | 0 | 2 | 🔴 No iniciado |
 | **Tests unitarios** | — | 50 tests | — | ✅ Pasando |
 
@@ -103,35 +103,55 @@ proxy.history.export_txt("reports/historial.txt")    # exportar legible
 
 ---
 
-## 🔴 Módulo B — Repeater (Análisis Manual)
-> Archivo planificado: `repeater.py`
+## 🟢 Módulo B — Repeater (Análisis Manual)
+> Archivo: `repeater.py` · GUI: `gui/repeater_tab.py`
 
 | CU | Descripción | Estado |
 |---|---|---|
-| CU-05 | Clonación de Petición → enviar al Repeater | ❌ No iniciado |
-| CU-06 | Reenvío Manipulado (verbos, headers, body libres) | ❌ No iniciado |
-| CU-07 | Comparativa de Respuestas entre distintos inputs | ❌ No iniciado |
+| CU-05 | Clonación de Petición → enviar al Repeater | ✅ Implementado |
+| CU-06 | Reenvío Manipulado (verbos, headers, body libres) | ✅ Implementado |
+| CU-07 | Comparativa de Respuestas entre distintos inputs | ✅ Implementado |
 
-**Pendiente implementar:**
-- [ ] Clase `Repeater` con método `send(request_str) -> response`
-- [ ] Parser de petición en texto plano editado por el usuario
-- [ ] Diff visual entre respuesta original y respuesta modificada
+**Implementado:**
+- [x] Clase `Repeater` con método `send(raw_request) -> RepeaterResponse`
+- [x] Parser de petición en texto plano con extracción de método, host, path, headers y body
+- [x] Panel dual Request / Response en `RepeaterTab` (editable | solo lectura)
+- [x] Selector de timeout y label de estado con duración y bytes recibidos
+- [x] Integración con ProxyTab: botón "Send to Repeater" (CU-05)
+- [x] Envío en hilo daemon — GUI no bloqueante
 
 ---
 
-## 🔴 Módulo C — Intruder (Automatización/Fuzzing)
-> Archivo planificado: `intruder.py`
+## 🟢 Módulo C — Intruder (Automatización/Fuzzing)
+> Archivo: `intruder.py` · GUI: `gui/intruder_tab.py` · Doc: `MODULO_INTRUDER.md`
 
 | CU | Descripción | Estado |
 |---|---|---|
-| CU-08 | Definición de Puntos de Inyección (marcadores en la petición) | ❌ No iniciado |
-| CU-09 | Gestión de Payloads (cargar diccionarios `.txt`) | ❌ No iniciado |
-| CU-10 | Ejecución de Ataque (envío masivo, registro de respuestas) | ❌ No iniciado |
+| CU-08 | Definición de Puntos de Inyección (marcadores §payload§) | ✅ Implementado |
+| CU-09 | Gestión de Payloads (cargar diccionarios `.txt`) | ✅ Implementado |
+| CU-10 | Ejecución de Ataque (envío masivo, registro de respuestas) | ✅ Implementado |
 
-**Pendiente implementar:**
-- [ ] Diccionarios de payloads: `/payloads/sqli.txt`, `xss.txt`, `traversal.txt`
-- [ ] Motor de fuzzing con control de tasa (rate limiting)
-- [ ] Detección de anomalías en respuestas (status code, tamaño, tiempo)
+**Implementado:**
+- [x] Clase `Intruder` con `load_payloads()`, `set_template()`, `run()` y `stop()`
+- [x] Marcador de inyección `§texto§` (mismo estándar que Burp Suite real)
+- [x] Diccionarios integrados: `payloads/sqli.txt`, `xss.txt`, `traversal.txt`
+- [x] Soporte de archivos de payloads personalizados (cualquier `.txt`)
+- [x] Control de concurrencia con `threading.Semaphore` (1-20 hilos configurables)
+- [x] Flag de cancelación `stop()` thread-safe
+- [x] Dataclass `IntruderResult` con: index, payload, status_code, length, duration_ms, error
+- [x] GUI `IntruderTab`: editor de template, panel de payloads, tabla de resultados
+- [x] Tabla coloreada por código HTTP (🟢 2xx · 🔵 3xx · 🟡 4xx · 🔴 5xx)
+- [x] Botón "Añadir §§" para envolver selección con marcadores
+- [x] Export CSV de resultados del ataque
+- [x] Envío en hilo daemon — GUI no bloqueante
+
+```python
+# Ejemplo de uso programático
+intruder = Intruder()
+payloads = intruder.load_payloads("payloads/sqli.txt")   # CU-09
+intruder.set_template("GET /search?q=§test§ HTTP/1.1\nHost: site.com\n\n")  # CU-08
+intruder.run(payloads=payloads, on_result=mi_callback, threads=5)  # CU-10
+```
 
 ---
 
@@ -155,11 +175,13 @@ proxy.history.export_txt("reports/historial.txt")    # exportar legible
 ### Implementado ✅
 ```
 PROYECTO_BURP_PYTHON/
-├── main.py                 ✅ Punto de entrada inicializa Proxy y GUI
-├── test_proxy.py           ✅ ~50 tests unitarios (todos passing)
-├── README.md               ✅ Documentación de uso
+├── main.py                 ✅ Punto de entrada: inicializa Proxy y GUI
+├── repeater.py             ✅ CU-05/06/07: Motor de reenvío manual (Módulo B)
+├── intruder.py             ✅ CU-08/09/10: Motor de fuzzing (Módulo C)
+├── README.md               ✅ Documentación de uso del proxy
 ├── Documentacion.md        ✅ Especificación del proyecto
 ├── STATUS.md               ✅ Este archivo
+├── MODULO_INTRUDER.md      ✅ Documentación técnica del Módulo C
 ├── .gitignore              ✅ Ignora temporales
 ├── proxy/
 │   ├── __init__.py         ✅ Paquete (expone servidor, handler, intercept, history)
@@ -170,29 +192,30 @@ PROYECTO_BURP_PYTHON/
 │   └── MODULO_PROXY.md     ✅ Doc extensa Módulo A
 ├── logic/
 │   └── parser.py           ✅ Parseo puro de strings a dataclass de requests
-├── gui/                    ✅ Interfaz Gráfica (CustomTkinter)
-│   ├── __init__.py
-│   ├── app.py              ✅ App window y tab control
-│   ├── proxy_tab.py        ✅ UI Intercept, history table, txt view
+├── gui/
+│   ├── __init__.py         ✅
+│   ├── app.py              ✅ Ventana principal, tab control (Proxy/Repeater/Intruder)
+│   ├── proxy_tab.py        ✅ UI Intercept, history table, visor (Módulo A)
+│   ├── repeater_tab.py     ✅ Panel Request/Response dual (Módulo B)
+│   ├── intruder_tab.py     ✅ Editor template + payloads + tabla resultados (Módulo C)
 │   └── colors.py           ✅ Tokens de diseño del color oscuro
+├── payloads/
+│   ├── sqli.txt            ✅ ~40 payloads SQL Injection
+│   ├── xss.txt             ✅ ~25 payloads XSS
+│   └── traversal.txt       ✅ ~30 payloads Path Traversal
 └── tests/
     ├── __init__.py         ✅
+    ├── test_proxy.py       ✅ ~50 tests unitarios (todos passing)
     └── README.md           ✅
 ```
 
 ### Pendiente ❌
 ```
 PROYECTO_BURP_PYTHON/
-├── repeater.py             ❌
-├── intruder.py             ❌
 ├── logic/
-│   ├── scanner.py          ❌
-│   └── utils.py            ❌
-├── payloads/
-│   ├── sqli.txt            ❌
-│   ├── xss.txt             ❌
-│   └── traversal.txt       ❌
-└── reports/                ❌ (directorio)
+│   ├── scanner.py          ❌ CU-11: detección pasiva de cabeceras inseguras
+│   └── utils.py            ❌ Funciones auxiliares
+└── reports/                ❌ CU-12: directorio de informes exportados
 ```
 
 ---
@@ -277,8 +300,9 @@ Ran 50 tests in 0.04s — OK ✅
 ## 🗺️ Próximos Pasos Sugeridos
 
 ```
-1. ✅ [Módulo A] El CORE y GUI de intercepción han finalizado
-2.    [Módulo B] Implementar el tab 'Repeater' enviando peticiones del historial hacia él (clonar)
-3.    [Módulo B] UI 'Repeater' con dos paneles de texto (Request / Response). Funcionalidad de enviar al servidor
-4.    [Módulo C] Implementar intruder.py para pruebas fuzz y su tab (Intruder)
+1. ✅ [Módulo A] CORE y GUI de intercepción completados
+2. ✅ [Módulo B] Repeater con panel dual Request/Response implementado
+3. ✅ [Módulo C] Intruder con fuzzing, payloads y tabla de resultados implementado
+4.    [Módulo D] Implementar logic/scanner.py: detección pasiva de cabeceras inseguras (CU-11)
+5.    [Módulo D] Generador de informes en /reports/ con export HTML/PDF (CU-12)
 ```

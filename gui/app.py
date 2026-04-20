@@ -20,6 +20,7 @@ import customtkinter as ctk
 from proxy.server import ProxyServer
 from .proxy_tab import ProxyTab
 from .repeater_tab import RepeaterTab
+from .intruder_tab import IntruderTab
 from .colors import (
     BG_DARK, BG_SECONDARY, ACCENT_BLUE, ACCENT_GREEN,
     ACCENT_RED, TEXT_PRIMARY, TEXT_MUTED, BORDER,
@@ -146,16 +147,12 @@ class App(ctk.CTk):
         )
         self._repeater_tab.pack(fill="both", expand=True)
 
-        # ── Pestaña Intruder (placeholder) ──────────────────────────────────
+        # ── Pestaña Intruder ──────────────────────────────────────────────────
         self._tab_view.add("  Intruder  ")
-        self._build_placeholder(
-            parent=self._tab_view.tab("  Intruder  "),
-            icon="💥",
-            title="Intruder",
-            subtitle="Módulo C — Fuzzing automatizado",
-            detail="Motor de ataque por diccionario para detectar\n"
-                   "vulnerabilidades SQLi, XSS y Path Traversal.",
+        self._intruder_tab = IntruderTab(
+            master=self._tab_view.tab("  Intruder  "),
         )
+        self._intruder_tab.pack(fill="both", expand=True)
 
     # ── API pública de navegación entre pestañas ────────────────────────
 
@@ -171,7 +168,17 @@ class App(ctk.CTk):
         self._repeater_tab.load_request(raw_request)
         self._tab_view.set("  Repeater  ")
 
-    # ── Placeholder (sólo para Intruder, aún no implementado) ───────────────
+    def switch_to_intruder(self, raw_request: str) -> None:
+        """
+        Carga una petición en el Intruder y cambia el foco a esa pestaña.
+
+        Args:
+            raw_request (str): Texto completo de la petición HTTP.
+        """
+        self._intruder_tab.load_request(raw_request)
+        self._tab_view.set("  Intruder  ")
+
+    # ── Placeholder (módulos futuros) ────────────────────────────────────────
 
     def _build_placeholder(
         self,
