@@ -55,6 +55,8 @@ class RequestRecord:
     raw_request     : bytes     = b""
     response_status : str       = ""
     response_raw    : bytes     = b""
+    display_request : str       = ""
+    display_response: str       = ""
     duration_ms     : float     = 0.0
     client_ip       : str       = ""
 
@@ -179,6 +181,27 @@ class History:
                 if r.id == req_id:
                     return r
         return None
+
+    def update(self, req_id: int, **fields) -> bool:
+        """
+        Actualiza en sitio un registro del historial por ID (thread-safe).
+
+        Args:
+            req_id (int): ID del registro a modificar.
+            **fields: Campos del dataclass RequestRecord a actualizar.
+
+        Returns:
+            bool: True si se actualizó, False si no existe el ID.
+        """
+        with self._lock:
+            for rec in self._records:
+                if rec.id != req_id:
+                    continue
+                for key, value in fields.items():
+                    if hasattr(rec, key):
+                        setattr(rec, key, value)
+                return True
+        return False
 
     # ── Filtros ───────────────────────────────────────────────
     def filter(

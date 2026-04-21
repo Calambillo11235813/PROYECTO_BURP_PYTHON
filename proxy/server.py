@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import socket
 import threading
+from pathlib import Path
 
+from core.certs_manager import CertsManager
+from .host_filter import HostFilter
 from .handler import ConnectionHandler, InterceptController
 from .history import History
 
@@ -28,6 +31,7 @@ from .history import History
 PROXY_HOST      = "127.0.0.1"
 PROXY_PORT      = 8080
 MAX_CONNECTIONS = 10  # backlog del socket (conexiones pendientes en cola)
+FILTER_CONFIG_FILE = "filter_hosts.conf"
 
 # ── Códigos de color ANSI (mínimos para el banner) ────────────────────────────
 _CYAN   = "\033[96m"
@@ -37,29 +41,28 @@ _RED    = "\033[91m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
 
+_FILTER_MODES = ("blacklist", "whitelist")
+
 
 class ProxyServer:
     """
-    Servidor proxy HTTP de intercepción.
+    Servidor proxy HTTP de intercepción con soporte MITM SSL/TLS.
 
     Crea el socket TCP, acepta conexiones del navegador y delega el
     procesamiento de cada una a un ConnectionHandler ejecutado en su
-    propio hilo daemon.
+    propio hilo daemon. Con MITM activo, las conexiones HTTPS se
+    descifran y se exponen como peticiones HTTP planas.
 
     Attributes:
         host      (str)                : IP de escucha.
         port      (int)                : Puerto de escucha.
-        history   (History)            : Historial persistente de peticiones (CU-03).
+        history   (History)            : Historial persistente (CU-03).
         intercept (InterceptController): Controlador de intercepción (CU-04).
+        certs     (CertsManager)       : Gestor de CA y certs de dominio MITM.
 
     Args:
         host (str): IP local. Por defecto '127.0.0.1'.
         port (int): Puerto local. Por defecto 8080.
-
-    Ejemplo:
-        proxy = ProxyServer()
-        proxy.intercept.enable()   # activar intercepción antes de iniciar
-        proxy.start()              # bloqueante hasta Ctrl+C
     """
 
     def __init__(
@@ -71,9 +74,196 @@ class ProxyServer:
         self.port      = port
         self.history   = History()
         self.intercept = InterceptController()
-        self._handler  = ConnectionHandler(self.history, self.intercept)
+        self.host_filter = HostFilter()
+        self._filter_rules: dict[str, list[str]] = {
+            "blacklist": [],
+            "whitelist": [],
+        }
+        self.certs     = CertsManager()   # genera la CA si no existe
+        self._handler  = ConnectionHandler(
+            self.history,
+            self.intercept,
+            certs_manager=self.certs,
+            host_filter=self.host_filter,
+        )
         self._server_socket: socket.socket | None = None
         self._running  = False
+        self._filter_config_path = (
+            Path(__file__).resolve().parent.parent / FILTER_CONFIG_FILE
+        )
+        self.load_filter_config()
+
+    # ── API de filtrado de host ─────────────────────────────────────────────
+
+    def set_filter_mode(self, mode: str) -> None:
+        normalized_mode = self._normalize_mode(mode)
+        if not normalized_mode:
+            return
+        self.host_filter.set_mode(normalized_mode)
+        self._sync_active_rules_to_host_filter()
+
+    def get_filter_mode(self) -> str:
+        return self.host_filter.mode
+
+    def add_filter_pattern(self, pattern: str) -> bool:
+        normalized = self._normalize_pattern(pattern)
+        if not normalized:
+            return False
+
+        mode = self.host_filter.mode
+        rules = self._filter_rules[mode]
+        if normalized in rules:
+            return False
+
+        rules.append(normalized)
+        self._sync_active_rules_to_host_filter()
+        return True
+
+    def remove_filter_pattern(self, pattern: str) -> bool:
+        normalized = self._normalize_pattern(pattern)
+        if not normalized:
+            return False
+
+        mode = self.host_filter.mode
+        rules = self._filter_rules[mode]
+        try:
+            rules.remove(normalized)
+        except ValueError:
+            return False
+
+        self._sync_active_rules_to_host_filter()
+        return True
+
+    def clear_filter_patterns(self) -> None:
+        self._filter_rules[self.host_filter.mode] = []
+        self._sync_active_rules_to_host_filter()
+
+    def get_filter_patterns(self) -> list[str]:
+        return list(self._filter_rules[self.host_filter.mode])
+
+    def get_filter_patterns_for_mode(self, mode: str) -> list[str]:
+        normalized_mode = self._normalize_mode(mode)
+        if not normalized_mode:
+            return []
+        return list(self._filter_rules[normalized_mode])
+
+    def get_filter_config_path(self) -> str:
+        return str(self._filter_config_path)
+
+    def load_filter_config(self) -> None:
+        """
+        Carga modo y reglas del archivo externo de filtro.
+
+        Formato soportado:
+            [settings]
+            mode=blacklist|whitelist
+
+            [blacklist]
+            *.dominio.com
+
+            [whitelist]
+            localhost:3000
+
+        También acepta líneas "pattern=..." dentro de [blacklist]/[whitelist].
+        """
+        path = self._filter_config_path
+        if not path.exists():
+            self.save_filter_config()
+            return
+
+        try:
+            mode = self.host_filter.mode
+            rules: dict[str, list[str]] = {
+                "blacklist": [],
+                "whitelist": [],
+            }
+            section = ""
+
+            with path.open("r", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or line.startswith(";"):
+                        continue
+
+                    if line.startswith("[") and line.endswith("]"):
+                        section = line[1:-1].strip().lower()
+                        continue
+
+                    if section == "settings":
+                        if "=" not in line:
+                            continue
+                        key, value = line.split("=", 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        if key == "mode":
+                            maybe_mode = self._normalize_mode(value)
+                            if maybe_mode:
+                                mode = maybe_mode
+                        continue
+
+                    if section in _FILTER_MODES:
+                        value = line
+                        if "=" in line:
+                            key, maybe_value = line.split("=", 1)
+                            key = key.strip().lower()
+                            if key == "pattern":
+                                value = maybe_value
+                            else:
+                                continue
+
+                        normalized_pattern = self._normalize_pattern(value)
+                        if normalized_pattern and normalized_pattern not in rules[section]:
+                            rules[section].append(normalized_pattern)
+                        continue
+
+            self._filter_rules = rules
+            self.host_filter.set_mode(mode)
+            self._sync_active_rules_to_host_filter()
+
+        except OSError:
+            # Si falla lectura, mantener configuración en memoria actual.
+            return
+
+    def save_filter_config(self) -> None:
+        """Persistencia de reglas actuales de filtro en archivo editable."""
+        path = self._filter_config_path
+        try:
+            with path.open("w", encoding="utf-8") as fh:
+                fh.write("# Reglas de filtro de host para Mini-Burp\n")
+                fh.write("# Formato seccionado tipo INI\n")
+                fh.write("# Puedes usar wildcards, ej: *.microsoft.com\n")
+                fh.write("# También host:puerto, ej: localhost:3000\n\n")
+
+                fh.write("[settings]\n")
+                fh.write(f"mode={self.host_filter.mode}\n\n")
+
+                fh.write("[blacklist]\n")
+                for pattern in self._filter_rules["blacklist"]:
+                    fh.write(f"{pattern}\n")
+
+                fh.write("\n[whitelist]\n")
+                for pattern in self._filter_rules["whitelist"]:
+                    fh.write(f"{pattern}\n")
+        except OSError:
+            return
+
+    @staticmethod
+    def _normalize_pattern(pattern: str) -> str:
+        return (pattern or "").strip().lower()
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        normalized = (mode or "").strip().lower()
+        if normalized in _FILTER_MODES:
+            return normalized
+        return ""
+
+    def _sync_active_rules_to_host_filter(self) -> None:
+        """Copia al motor de filtrado solo las reglas del modo activo."""
+        mode = self.host_filter.mode
+        self.host_filter.clear_patterns()
+        for pattern in self._filter_rules[mode]:
+            self.host_filter.add_pattern(pattern)
 
     # ── Ciclo de vida ────────────────────────────────────────────────────────
 

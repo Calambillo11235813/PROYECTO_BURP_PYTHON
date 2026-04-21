@@ -18,18 +18,27 @@ Materia: Ingeniería de Software 2
 from __future__ import annotations
 
 import queue
+import re
 import socket
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .host_filter import (
+    FILTER_DECISION_BYPASS,
+    FILTER_DECISION_DROP,
+    HostFilter,
+)
 from .history import History, RequestRecord
-from logic.parser import ParsedRequest, parse_request
+from .mitm import MitmHandler
+from logic.http_body import build_display_http_message
+from logic.parser import ParsedRequest, parse_request, display_host
 
 # ── Constantes de bajo nivel (solo para este módulo) ──────────────────────────
 BUFFER_SIZE        = 4096   # bytes por llamada a recv()
 CONNECTION_TIMEOUT = 10     # segundos antes de cerrar un socket idle
+MAX_HEADER_BYTES   = 64 * 1024
 
 
 # ── Colores ANSI para el log en consola ───────────────────────────────────────
@@ -62,6 +71,7 @@ class PendingRequest:
     id     : int
     raw    : bytes
     parsed : ParsedRequest
+    display_text: str = ""
     _event : threading.Event = field(default_factory=threading.Event, repr=False)
     _decision    : str   = field(default="", init=False, repr=False)
     _modified_raw: bytes = field(default=b"", init=False, repr=False)
@@ -98,6 +108,12 @@ class PendingRequest:
         self._decision = "drop"
         self._event.set()
 
+    def should_forward_original(self, editor_text: str) -> bool:
+        """True si el usuario no modificó el contenido mostrado en el editor."""
+        if not self.display_text:
+            return False
+        return _normalize_text(editor_text) == _normalize_text(self.display_text)
+
 
 class InterceptController:
     """
@@ -133,6 +149,7 @@ class InterceptController:
         req_id: int,
         raw   : bytes,
         parsed: ParsedRequest,
+        display_text: str = "",
     ) -> PendingRequest:
         """
         Crea un PendingRequest, lo encola y lo retorna para que el hilo
@@ -146,7 +163,9 @@ class InterceptController:
         Returns:
             PendingRequest: Objeto en espera de decisión.
         """
-        pending = PendingRequest(id=req_id, raw=raw, parsed=parsed)
+        pending = PendingRequest(
+            id=req_id, raw=raw, parsed=parsed, display_text=display_text,
+        )
         self._queue.put(pending)
         return pending
 
@@ -191,13 +210,17 @@ class ConnectionHandler:
 
     def __init__(
         self,
-        history  : History,
-        intercept: InterceptController,
+        history   : History,
+        intercept : InterceptController,
+        certs_manager=None,     # Optional[CertsManager] — None = modo túnal
+        host_filter: HostFilter | None = None,
     ) -> None:
-        self.history   = history
-        self.intercept = intercept
-        self._count    = 0
-        self._lock     = threading.Lock()
+        self.history       = history
+        self.intercept     = intercept
+        self.certs_manager = certs_manager  # Si es None, HTTPS no se descifra
+        self.host_filter   = host_filter or HostFilter()
+        self._count        = 0
+        self._lock         = threading.Lock()
 
     # ── API pública ──────────────────────────────────────────────────────────
 
@@ -225,16 +248,48 @@ class ConnectionHandler:
             if not parsed:
                 return
 
+            # Filtrado de dominio antes de interceptar o dibujar en historial.
+            filter_decision = self.host_filter.decide(parsed.host, parsed.port)
+            if filter_decision == FILTER_DECISION_DROP:
+                self._drop_silently(client_socket)
+                return
+            if filter_decision == FILTER_DECISION_BYPASS:
+                self._forward_silently(client_socket, parsed, raw)
+                return
+
             req_id = self._next_id()
             self._log_request(req_id, client_address, parsed, raw)
+            display_request = build_display_http_message(raw)
 
             response    = b""
+            display_response = ""
             resp_status = ""
             t_start     = time.perf_counter()
+            pending_record_created = False
 
             # ── CU-04: Intercepción ────────────────────────────────────
             if self.intercept.intercept_enabled and parsed.method.upper() != "CONNECT":
-                pending = self.intercept.intercept(req_id, raw, parsed)
+                # Publicar inmediatamente en historial para que la GUI muestre
+                # la fila con estado temporal mientras el hilo espera Forward.
+                self.history.add(RequestRecord(
+                    id=req_id, timestamp=datetime.now(),
+                    method=parsed.method,
+                    host=display_host(parsed.host, parsed.port),
+                    port=parsed.port, path=parsed.path,
+                    headers=parsed.headers, body=parsed.body,
+                    raw_request=raw,
+                    response_status="PENDIENTE",
+                    response_raw=b"",
+                    display_request=display_request,
+                    display_response="",
+                    duration_ms=0.0,
+                    client_ip=client_address[0],
+                ))
+                pending_record_created = True
+
+                pending = self.intercept.intercept(
+                    req_id, raw, parsed, display_text=display_request,
+                )
                 print(
                     f"{Colors.YELLOW}[INTERCEPT #{req_id}] Petición pausada. "
                     f"Esperando decisión...{Colors.RESET}"
@@ -246,6 +301,12 @@ class ConnectionHandler:
                     client_socket.sendall(
                         b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"
                     )
+                    self.history.update(
+                        req_id,
+                        response_status="HTTP/1.1 403 Forbidden",
+                        response_raw=b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+                        duration_ms=(time.perf_counter() - t_start) * 1000,
+                    )
                     return
 
                 if decision == "timeout":
@@ -253,13 +314,36 @@ class ConnectionHandler:
                 else:
                     print(f"{Colors.GREEN}[INTERCEPT #{req_id}] Reenviando.{Colors.RESET}")
 
-            # ── Reenvío ────────────────────────────────────────────────
+            # ── Reenvío / MITM ──────────────────────────────────────────
             if parsed.method.upper() == "CONNECT":
-                self._handle_https_tunnel(client_socket, parsed.host, parsed.port, req_id)
+                if self.certs_manager is not None:
+                    # MITM: descifra TLS y pasa las peticiones por el pipeline
+                    # completo (historial e intercepción gestionados internamente).
+                    mitm_ok = MitmHandler(
+                        host      = parsed.host,
+                        port      = parsed.port,
+                        req_id    = req_id,
+                        certs     = self.certs_manager,
+                        history   = self.history,
+                        intercept = self.intercept,
+                        next_id   = self._next_id,
+                        client_ip = client_address[0],
+                    ).handle(client_socket)
+                    if mitm_ok:
+                        return  # MitmHandler ya guardó cada request en el historial
+                    print(
+                        f"{Colors.YELLOW}[MITM #{req_id}] Falló MITM; "
+                        f"fallback a túnel CONNECT.{Colors.RESET}"
+                    )
+                # Sin MITM: túnal ciego (comportamiento original)
+                self._handle_https_tunnel(
+                    client_socket, parsed.host, parsed.port, req_id,
+                )
                 resp_status = "TUNNEL"
             else:
                 response = self._forward_request(parsed.host, parsed.port, raw) or b""
                 if response:
+                    display_response = build_display_http_message(response)
                     self._log_response(req_id, response)
                     client_socket.sendall(response)
                     try:
@@ -272,16 +356,34 @@ class ConnectionHandler:
 
             duration_ms = (time.perf_counter() - t_start) * 1000
 
-            # ── CU-03: Guardar en historial ────────────────────────────
-            self.history.add(RequestRecord(
-                id=req_id, timestamp=datetime.now(),
-                method=parsed.method, host=parsed.host,
-                port=parsed.port, path=parsed.path,
-                headers=parsed.headers, body=parsed.body,
-                raw_request=raw, response_status=resp_status,
-                response_raw=response, duration_ms=duration_ms,
-                client_ip=client_address[0],
-            ))
+            # CU-03: Guardar en historial — display_host() produce el string
+            # limpio de host para la GUI (ej. 'api.x.com:443', no 'api.x.com').
+            # Este procesamiento ocurre aqui, en el hilo del proxy, para que
+            # la interfaz grafica no tenga que construir strings en cada ciclo.
+            if pending_record_created:
+                self.history.update(
+                    req_id,
+                    raw_request=raw,
+                    response_status=resp_status,
+                    response_raw=response,
+                    display_request=display_request,
+                    display_response=display_response,
+                    duration_ms=duration_ms,
+                )
+            else:
+                self.history.add(RequestRecord(
+                    id=req_id, timestamp=datetime.now(),
+                    method=parsed.method,
+                    host=display_host(parsed.host, parsed.port),  # string listo para GUI
+                    port=parsed.port, path=parsed.path,
+                    headers=parsed.headers, body=parsed.body,
+                    raw_request=raw, response_status=resp_status,
+                    response_raw=response,
+                    display_request=display_request,
+                    display_response=display_response,
+                    duration_ms=duration_ms,
+                    client_ip=client_address[0],
+                ))
 
         except socket.timeout:
             pass
@@ -290,7 +392,11 @@ class ConnectionHandler:
         except Exception as exc:
             print(f"{Colors.RED}[ERROR] Handler: {exc}{Colors.RESET}")
         finally:
-            client_socket.close()
+            # socket puede estar ya cerrado por MitmHandler o relay threads
+            try:
+                client_socket.close()
+            except OSError:
+                pass
 
     # ── Helpers privados ─────────────────────────────────────────────────────
 
@@ -302,23 +408,12 @@ class ConnectionHandler:
 
     def _receive_all(self, sock: socket.socket) -> bytes:
         """
-        Lee el socket en bloques de BUFFER_SIZE hasta que no hay más datos.
+        Lee una petición HTTP completa (headers + body si aplica).
 
         Returns:
             bytes: Bytes completos de la petición.
         """
-        data = b""
-        while True:
-            try:
-                chunk = sock.recv(BUFFER_SIZE)
-                if not chunk:
-                    break
-                data += chunk
-                if len(chunk) < BUFFER_SIZE:
-                    break
-            except socket.timeout:
-                break
-        return data
+        return _recv_http_message(sock, is_response=False)
 
     def _forward_request(
         self,
@@ -343,12 +438,7 @@ class ConnectionHandler:
             srv.settimeout(CONNECTION_TIMEOUT)
             srv.connect((host, port))
             srv.sendall(raw)
-            response = b""
-            while True:
-                chunk = srv.recv(BUFFER_SIZE)
-                if not chunk:
-                    break
-                response += chunk
+            response = _recv_http_message(srv, is_response=True)
             srv.close()
             return response
         except Exception as exc:
@@ -361,6 +451,7 @@ class ConnectionHandler:
         host         : str,
         port         : int,
         req_id       : int,
+        silent       : bool = False,
     ) -> None:
         """
         Establece un relay TCP bidireccional para conexiones HTTPS.
@@ -379,7 +470,8 @@ class ConnectionHandler:
             srv.settimeout(CONNECTION_TIMEOUT)
             srv.connect((host, port))
             client_socket.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-            print(f"{Colors.CYAN}[#{req_id}] Túnel HTTPS → {host}:{port}{Colors.RESET}")
+            if not silent:
+                print(f"{Colors.CYAN}[#{req_id}] Túnel HTTPS → {host}:{port}{Colors.RESET}")
 
             def relay(src: socket.socket, dst: socket.socket) -> None:
                 try:
@@ -400,7 +492,39 @@ class ConnectionHandler:
             t1.join();  t2.join()
 
         except Exception as exc:
-            print(f"{Colors.RED}[ERROR] HTTPS Tunnel: {exc}{Colors.RESET}")
+            if not silent:
+                print(f"{Colors.RED}[ERROR] HTTPS Tunnel: {exc}{Colors.RESET}")
+
+    def _forward_silently(
+        self,
+        client_socket: socket.socket,
+        parsed: ParsedRequest,
+        raw: bytes,
+    ) -> None:
+        """Reenvía sin tocar UI/historial cuando una regla de filtro hace bypass."""
+        if parsed.method.upper() == "CONNECT":
+            self._handle_https_tunnel(
+                client_socket,
+                parsed.host,
+                parsed.port,
+                req_id=0,
+                silent=True,
+            )
+            return
+
+        response = self._forward_request(parsed.host, parsed.port, raw) or b""
+        if response:
+            client_socket.sendall(response)
+
+    @staticmethod
+    def _drop_silently(client_socket: socket.socket) -> None:
+        """Responde 403 local sin agregar eventos al historial/UI."""
+        try:
+            client_socket.sendall(
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"
+            )
+        except OSError:
+            pass
 
     # ── Log helpers ──────────────────────────────────────────────────────────
 
@@ -442,3 +566,95 @@ class ConnectionHandler:
         sep = "─" * 60
         print(f"{Colors.BOLD}[RESPONSE #{req_id}]{Colors.RESET} {Colors.GREEN}{first_line}{Colors.RESET}")
         print(f"{Colors.BLUE}{sep}{Colors.RESET}\n")
+
+
+def _normalize_text(value: str) -> str:
+    """Normaliza saltos de línea para comparar contenido mostrado/actual."""
+    return value.replace("\r\n", "\n").strip()
+
+
+def _recv_http_message(sock: socket.socket, is_response: bool) -> bytes:
+    """
+    Lee un mensaje HTTP completo evitando truncados por límites de chunk TCP.
+    """
+    data = b""
+
+    while b"\r\n\r\n" not in data:
+        chunk = _recv_chunk(sock)
+        if not chunk:
+            return data
+        data += chunk
+        if len(data) > MAX_HEADER_BYTES:
+            return data
+
+    header_end = data.find(b"\r\n\r\n")
+    header_bytes = data[:header_end]
+    body = data[header_end + 4:]
+    headers_text = header_bytes.decode("iso-8859-1", errors="replace")
+
+    if _has_chunked_encoding(headers_text):
+        body = _read_chunked_body(sock, body)
+        return header_bytes + b"\r\n\r\n" + body
+
+    content_length = _content_length(headers_text)
+    if content_length is not None:
+        while len(body) < content_length:
+            chunk = _recv_chunk(sock)
+            if not chunk:
+                break
+            body += chunk
+        return header_bytes + b"\r\n\r\n" + body[:content_length]
+
+    # Sin framing explícito: para requests normalmente no hay body.
+    # Para responses sin Content-Length ni chunked, la delimitación real es cierre de conexión.
+    if not is_response:
+        return header_bytes + b"\r\n\r\n" + body
+
+    extra = _read_until_timeout(sock)
+    return header_bytes + b"\r\n\r\n" + body + extra
+
+
+def _recv_chunk(sock: socket.socket) -> bytes:
+    try:
+        return sock.recv(BUFFER_SIZE)
+    except socket.timeout:
+        return b""
+    except OSError:
+        return b""
+
+
+def _read_until_timeout(sock: socket.socket) -> bytes:
+    out = b""
+    while True:
+        chunk = _recv_chunk(sock)
+        if not chunk:
+            break
+        out += chunk
+    return out
+
+
+def _has_chunked_encoding(headers_text: str) -> bool:
+    match = re.search(r"^transfer-encoding\s*:\s*(.+)$", headers_text, flags=re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return False
+    return "chunked" in match.group(1).lower()
+
+
+def _content_length(headers_text: str) -> int | None:
+    match = re.search(r"^content-length\s*:\s*(\d+)\s*$", headers_text, flags=re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _read_chunked_body(sock: socket.socket, initial: bytes) -> bytes:
+    data = initial
+    while b"\r\n0\r\n\r\n" not in data:
+        chunk = _recv_chunk(sock)
+        if not chunk:
+            break
+        data += chunk
+    return data

@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Directorio de entorno virtual (si se usa en el futuro)
+# Entorno virtual (NUNCA versionar)
 venv/
 env/
 .venv/
@@ -28,3 +28,7 @@ Thumbs.db
 *.csv
 *.txt
 !requirements.txt  # (si se crea se debe ignorar la regla de arriba)
+
+# Certificados MITM generados (ca.key es una clave privada, NUNCA versionar)
+certs/
+
