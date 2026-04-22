@@ -220,6 +220,8 @@ class MitmHandler:
                     raw_request=raw,
                     response_status="PENDIENTE",
                     response_raw=b"",
+                    response_headers={},
+                    response_body=b"",
                     display_request=display_request,
                     display_response="",
                     duration_ms=0.0,
@@ -240,6 +242,8 @@ class MitmHandler:
                         req_id,
                         response_status="HTTP/1.1 403 Forbidden",
                         response_raw=b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+                        response_headers={"Content-Length": "0"},
+                        response_body=b"",
                         duration_ms=(time.perf_counter() - t_start) * 1000,
                     )
                     continue
@@ -249,6 +253,7 @@ class MitmHandler:
                 break
             response = _recv_http_message(ssl_server, is_response=True)
             display_response = build_display_http_message(response) if response else ""
+            response_headers, response_body = _split_http_response(response or b"")
 
             # ── Devolver respuesta al navegador ──────────────────────────
             if response:
@@ -264,6 +269,8 @@ class MitmHandler:
                     raw_request=final_raw,
                     response_status=resp_status,
                     response_raw=response or b"",
+                    response_headers=response_headers,
+                    response_body=response_body,
                     display_request=display_request,
                     display_response=display_response,
                     duration_ms=duration_ms,
@@ -281,6 +288,8 @@ class MitmHandler:
                     raw_request=final_raw,
                     response_status=resp_status,
                     response_raw=response or b"",
+                    response_headers=response_headers,
+                    response_body=response_body,
                     display_request=display_request,
                     display_response=display_response,
                     duration_ms=duration_ms,
@@ -445,3 +454,26 @@ def _extract_status(response: bytes | None) -> str:
         return response.split(b"\r\n")[0].decode("utf-8", errors="replace")
     except Exception:
         return ""
+
+
+def _split_http_response(raw_response: bytes) -> tuple[dict[str, str], bytes]:
+    """Separa cabeceras y body de una respuesta HTTP cruda."""
+    if not raw_response:
+        return {}, b""
+
+    separator = b"\r\n\r\n"
+    idx = raw_response.find(separator)
+    if idx == -1:
+        return {}, b""
+
+    header_blob = raw_response[:idx].decode("iso-8859-1", errors="replace")
+    body = raw_response[idx + len(separator):]
+    headers: dict[str, str] = {}
+
+    for line in header_blob.split("\r\n")[1:]:
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        headers[key.strip()] = value.strip()
+
+    return headers, body

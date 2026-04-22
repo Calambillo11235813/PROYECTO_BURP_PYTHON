@@ -73,6 +73,8 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         self._filter_file_var = tk.StringVar(value=f"Archivo: {self.proxy.get_filter_config_path()}")
         self._filter_modal: ctk.CTkToplevel | None = None
         self._filter_rules_listbox: tk.Listbox | None = None
+        self._filter_paths_listbox: tk.Listbox | None = None
+        self._filter_path_var = tk.StringVar(value="")
 
         # BooleanVar del checkbox de auto-scroll (True = activo por defecto)
         self._auto_scroll_var = tk.BooleanVar(value=True)
@@ -239,6 +241,11 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         modal.protocol("WM_DELETE_WINDOW", self._close_filter_modal)
         self._filter_modal = modal
 
+        # Limpiar variables asociadas para evitar crashes en CTkEntry tras reabrir el modal
+        self._filter_domain_var = tk.StringVar(value="")
+        self._filter_path_var = tk.StringVar(value="")
+        self._filter_mode_var = tk.StringVar(value=self.proxy.get_filter_mode())
+
         container = ctk.CTkFrame(modal, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=14, pady=14)
 
@@ -255,10 +262,17 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
             text_color=TEXT_MUTED,
             anchor="w",
-        ).pack(fill="x", pady=(0, 12))
+        ).pack(fill="x", pady=(0, 6))
 
-        mode_row = ctk.CTkFrame(container, fg_color=BG_SECONDARY, corner_radius=8, height=42)
-        mode_row.pack(fill="x", pady=(0, 10))
+        tabs = ctk.CTkTabview(container, fg_color=BG_DARK, segmented_button_selected_color=ACCENT_BLUE)
+        tabs.pack(fill="both", expand=True, pady=(0, 10))
+        
+        tab_hosts = tabs.add("Filtro de Dominios")
+        tab_paths = tabs.add("Rutas Ignoradas")
+
+        # ── Tab 1: Dominios ─────────────────────────────────────
+        mode_row = ctk.CTkFrame(tab_hosts, fg_color=BG_SECONDARY, corner_radius=8, height=42)
+        mode_row.pack(fill="x", pady=(5, 10))
         mode_row.pack_propagate(False)
 
         ctk.CTkLabel(
@@ -288,7 +302,7 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
             fg_color=ACCENT_GREEN,
         ).pack(side="left")
 
-        add_row = ctk.CTkFrame(container, fg_color=BG_SECONDARY, corner_radius=8, height=48)
+        add_row = ctk.CTkFrame(tab_hosts, fg_color=BG_SECONDARY, corner_radius=8, height=48)
         add_row.pack(fill="x", pady=(0, 10))
         add_row.pack_propagate(False)
 
@@ -346,14 +360,25 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
             command=self._on_remove_selected_filter,
         ).pack(side="left", padx=(0, 12), pady=8)
 
+        ctk.CTkButton(
+            add_row,
+            text="Eliminar seleccionada",
+            width=150,
+            height=32,
+            fg_color=BG_HOVER,
+            hover_color="#373e47",
+            text_color=TEXT_MUTED,
+            command=self._on_remove_selected_filter,
+        ).pack(side="left", padx=(0, 12), pady=8)
+
         ctk.CTkLabel(
-            container,
+            tab_hosts,
             text="Dominios en la lista activa:",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=TEXT_MUTED,
         ).pack(anchor="w", pady=(2, 6))
 
-        list_frame = tk.Frame(container, bg=BG_DARK, highlightthickness=1, highlightbackground=BORDER)
+        list_frame = tk.Frame(tab_hosts, bg=BG_DARK, highlightthickness=1, highlightbackground=BORDER)
         list_frame.pack(fill="both", expand=True)
 
         self._filter_rules_listbox = tk.Listbox(
@@ -373,6 +398,55 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         rules_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self._filter_rules_listbox.yview)
         rules_scroll.pack(side="right", fill="y")
         self._filter_rules_listbox.configure(yscrollcommand=rules_scroll.set)
+
+        # ── Tab 2: Rutas Ignoradas ──────────────────────────────
+        ctk.CTkLabel(
+            tab_paths,
+            text="Rutas y extensiones que el proxy reenviará silenciosamente sin mostrar en el historial.",
+            font=ctk.CTkFont(size=12), text_color=TEXT_MUTED, justify="left", anchor="w"
+        ).pack(fill="x", pady=(5, 10))
+
+        add_path_row = ctk.CTkFrame(tab_paths, fg_color=BG_SECONDARY, corner_radius=8, height=48)
+        add_path_row.pack(fill="x", pady=(0, 10))
+        add_path_row.pack_propagate(False)
+        
+        ctk.CTkEntry(
+            add_path_row, textvariable=self._filter_path_var, height=32,
+            placeholder_text="Ruta, ej: /socket.io/* o *tunnel*",
+            fg_color=BG_DARK, text_color=TEXT_PRIMARY, border_color=BORDER,
+        ).pack(side="left", fill="x", expand=True, padx=(12, 8), pady=8)
+
+        ctk.CTkButton(
+            add_path_row, text="Añadir", width=92, height=32, fg_color=BG_HOVER, hover_color="#373e47",
+            text_color=TEXT_MUTED, command=self._on_add_filter_path,
+        ).pack(side="left", pady=8)
+        
+        ctk.CTkButton(
+            add_path_row, text="Limpiar", width=92, height=32, fg_color=BG_HOVER, hover_color="#373e47",
+            text_color=TEXT_MUTED, command=self._on_clear_filter_paths,
+        ).pack(side="left", padx=(8, 8), pady=8)
+
+        ctk.CTkButton(
+            add_path_row, text="Eliminar seleccionada", width=150, height=32, fg_color=BG_HOVER, hover_color="#373e47",
+            text_color=TEXT_MUTED, command=self._on_remove_selected_path,
+        ).pack(side="left", padx=(0, 12), pady=8)
+
+        paths_list_frame = tk.Frame(tab_paths, bg=BG_DARK, highlightthickness=1, highlightbackground=BORDER)
+        paths_list_frame.pack(fill="both", expand=True)
+
+        self._filter_paths_listbox = tk.Listbox(
+            paths_list_frame, bg=BG_DARK, fg=TEXT_PRIMARY, selectbackground=ACCENT_BLUE,
+            selectforeground="#ffffff", activestyle="none", font=("Consolas", 12),
+            borderwidth=0, highlightthickness=0,
+        )
+        self._filter_paths_listbox.pack(side="left", fill="both", expand=True)
+        self._filter_paths_listbox.bind("<Double-Button-1>", self._on_remove_selected_path)
+
+        paths_scroll = ttk.Scrollbar(paths_list_frame, orient="vertical", command=self._filter_paths_listbox.yview)
+        paths_scroll.pack(side="right", fill="y")
+        self._filter_paths_listbox.configure(yscrollcommand=paths_scroll.set)
+
+        # ── Footer común ─────────────────────────────────────────
 
         footer = ctk.CTkFrame(container, fg_color="transparent", height=42)
         footer.pack(fill="x", pady=(10, 0))
@@ -400,6 +474,31 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
             self._filter_modal.destroy()
         self._filter_modal = None
         self._filter_rules_listbox = None
+        self._filter_paths_listbox = None
+
+    def _on_add_filter_path(self) -> None:
+        pattern = self._filter_path_var.get().strip()
+        if not pattern: return
+        if self.proxy.add_ignore_path(pattern):
+            self._filter_path_var.set("")
+            self.proxy.save_filter_config()
+        self._refresh_filter_modal_rules()
+
+    def _on_clear_filter_paths(self) -> None:
+        self.proxy.clear_ignore_paths()
+        self.proxy.save_filter_config()
+        self._refresh_filter_modal_rules()
+
+    def _on_remove_selected_path(self, _event: tk.Event | None = None) -> None:
+        if self._filter_paths_listbox is None: return
+        selection = self._filter_paths_listbox.curselection()
+        if not selection: return
+        selected = self._filter_paths_listbox.get(selection[0]).strip()
+        if not selected or selected.startswith("("): return
+        
+        if self.proxy.remove_ignore_path(selected):
+            self.proxy.save_filter_config()
+            self._refresh_filter_modal_rules()
 
     def _on_remove_selected_filter(self, _event: tk.Event | None = None) -> None:
         """Elimina la regla seleccionada de la lista activa."""
@@ -434,29 +533,47 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         else:
             for pattern in patterns:
                 self._filter_rules_listbox.insert("end", pattern)
+                
+        # Refrescar Paths
+        if self._filter_paths_listbox is not None:
+            self._filter_paths_listbox.delete(0, "end")
+            paths = self.proxy.get_ignore_paths()
+            if not paths:
+                self._filter_paths_listbox.insert("end", "(Sin rutas ignoradas)")
+            else:
+                for p in paths:
+                    self._filter_paths_listbox.insert("end", p)
 
         self._filter_status_var.set(
-            f"Modo actual: {mode_title} ({len(patterns)} reglas)"
-            if patterns else f"Modo actual: {mode_title} (0 reglas)"
+            f"Modo actual: {mode_title} ({len(patterns)} reglas | {len(paths if self._filter_paths_listbox else [])} paths)"
         )
 
     # ── Panel principal ────────────────────────────────────────────────────────
 
     def _build_main_panel(self) -> None:
-        """PanedWindow vertical: tabla arriba · editor abajo (redimensionable)."""
+        """Vista maestro-detalle con sash redimensionable (estilo Burp Suite)."""
         paned = tk.PanedWindow(
-            self, orient=tk.VERTICAL,
-            bg=BG_DARK, sashwidth=6, sashrelief="flat", sashpad=2,
+            self,
+            orient=tk.VERTICAL,
+            bg=BG_DARK,
+            sashwidth=5,
+            sashrelief="flat",
+            sashpad=1,
         )
         paned.pack(fill="both", expand=True)
 
+        # Panel superior: tabla de historial
         table_frame = tk.Frame(paned, bg=BG_DARK)
-        paned.add(table_frame, minsize=160)
+        paned.add(table_frame, minsize=120, stretch="always")
         self._build_history_table(table_frame)
 
-        editor_frame = ctk.CTkFrame(paned, fg_color=BG_SECONDARY, corner_radius=8)
-        paned.add(editor_frame, minsize=140)
-        self._build_request_editor(editor_frame)
+        # Panel inferior: detalle Request / Response
+        details_frame = tk.Frame(paned, bg=BG_SECONDARY)
+        paned.add(details_frame, minsize=220, stretch="always")
+        self._build_details_panel(details_frame)
+
+        # Posicionar el sash: tabla ocupa ~50% del espacio al inicio
+        self.after(150, lambda: paned.sash_place(0, 1, int(paned.winfo_height() * 0.50)))
 
     # ── Tabla de historial ────────────────────────────────────────────────────
 
@@ -521,46 +638,107 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         # Listener de selección → carga raw en el editor inferior
         self._tree.bind("<<TreeviewSelect>>", self._on_row_select)
 
-    # ── Editor inferior ────────────────────────────────────────────────────────
+    # ── Detalle inferior (Request/Response) ───────────────────────────────────
 
-    def _build_request_editor(self, parent: ctk.CTkFrame) -> None:
-        """Panel inferior: encabezado con botones Forward/Drop + CTkTextbox editable."""
-        header = ctk.CTkFrame(parent, fg_color="transparent", height=34)
-        header.pack(fill="x", padx=10, pady=(6, 2))
-        header.pack_propagate(False)
+    def _build_details_panel(self, parent: tk.Frame) -> None:
+        """Panel dual Request / Response con layout grid correcto (estilo IDE)."""
+        # Fila 0: barra de encabezados (altura fija)
+        # Fila 1: textboxes (absorbe TODO el espacio restante)
+        parent.grid_rowconfigure(0, weight=0)
+        parent.grid_rowconfigure(1, weight=1)
+        # Dos columnas iguales al 50/50
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_columnconfigure(1, weight=1)
 
-        # Forward / Drop — visibles solo mientras hay intercepción activa
-        self._btn_frame = ctk.CTkFrame(header, fg_color="transparent")
+        # ── Encabezado izquierdo (Request) ──
+        header_left = tk.Frame(parent, bg=BG_SECONDARY, height=28)
+        header_left.grid(row=0, column=0, sticky="ew", padx=(8, 4), pady=(4, 2))
+        header_left.pack_propagate(False)
+
+        self._btn_frame = tk.Frame(header_left, bg=BG_SECONDARY)
         self._btn_frame.pack(side="right")
 
-        self._editor_lbl = ctk.CTkLabel(
-            header, text="📋 Petición seleccionada",
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT_MUTED,
-            anchor="w", justify="left",
+        self._editor_lbl = tk.Label(
+            header_left,
+            text="📋 Request",
+            font=("Consolas", 10, "bold"),
+            fg=TEXT_MUTED,
+            bg=BG_SECONDARY,
+            anchor="w",
         )
-        self._editor_lbl.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._editor_lbl.pack(side="left", fill="x", expand=True)
 
         self._btn_forward = ctk.CTkButton(
-            self._btn_frame, text="▶  Forward", width=110, height=28,
-            fg_color=ACCENT_GREEN, hover_color="#2ea843",
-            text_color="#ffffff", font=ctk.CTkFont(size=12, weight="bold"),
+            self._btn_frame, text="▶  Forward",
+            width=110, height=26, fg_color=ACCENT_GREEN, hover_color="#2ea843",
+            text_color="#ffffff", font=ctk.CTkFont(size=11, weight="bold"),
             corner_radius=6, command=self._on_forward,
         )
         self._btn_drop = ctk.CTkButton(
-            self._btn_frame, text="✕  Drop", width=90, height=28,
-            fg_color=ACCENT_RED, hover_color="#da3633",
-            text_color="#ffffff", font=ctk.CTkFont(size=12, weight="bold"),
+            self._btn_frame, text="✕  Drop",
+            width=90, height=26, fg_color=ACCENT_RED, hover_color="#da3633",
+            text_color="#ffffff", font=ctk.CTkFont(size=11, weight="bold"),
             corner_radius=6, command=self._on_drop,
         )
 
-        self._editor_box = ctk.CTkTextbox(
-            parent,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color=BG_DARK, text_color=TEXT_PRIMARY,
-            border_color=BORDER, border_width=1,
-            wrap="none", corner_radius=6,
+        # ── Encabezado derecho (Response) ──
+        header_right = tk.Frame(parent, bg=BG_SECONDARY, height=28)
+        header_right.grid(row=0, column=1, sticky="ew", padx=(4, 8), pady=(4, 2))
+        header_right.pack_propagate(False)
+        tk.Label(
+            header_right,
+            text="📥 Response",
+            font=("Consolas", 10, "bold"),
+            fg=TEXT_MUTED,
+            bg=BG_SECONDARY,
+            anchor="w",
+        ).pack(side="left")
+
+        # ── Textbox Request (editable durante intercepción) ──
+        req_frame = tk.Frame(parent, bg=BORDER)
+        req_frame.grid(row=1, column=0, sticky="nsew", padx=(8, 3), pady=(0, 6))
+        req_frame.grid_rowconfigure(0, weight=1)
+        req_frame.grid_columnconfigure(0, weight=1)
+
+        self._editor_box = tk.Text(
+            req_frame,
+            font=("Consolas", 11),
+            bg=BG_DARK, fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            selectbackground=ACCENT_BLUE,
+            relief="flat", borderwidth=0,
+            wrap="none",
         )
-        self._editor_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        vsb_req = ttk.Scrollbar(req_frame, orient="vertical",   command=self._editor_box.yview)
+        hsb_req = ttk.Scrollbar(req_frame, orient="horizontal", command=self._editor_box.xview)
+        self._editor_box.configure(yscrollcommand=vsb_req.set, xscrollcommand=hsb_req.set)
+        vsb_req.grid(row=0, column=1, sticky="ns")
+        hsb_req.grid(row=1, column=0, sticky="ew")
+        self._editor_box.grid(row=0, column=0, sticky="nsew")
+        self._editor_box.configure(state="disabled")
+
+        # ── Textbox Response (solo lectura) ──
+        resp_frame = tk.Frame(parent, bg=BORDER)
+        resp_frame.grid(row=1, column=1, sticky="nsew", padx=(3, 8), pady=(0, 6))
+        resp_frame.grid_rowconfigure(0, weight=1)
+        resp_frame.grid_columnconfigure(0, weight=1)
+
+        self._response_box = tk.Text(
+            resp_frame,
+            font=("Consolas", 11),
+            bg=BG_DARK, fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            selectbackground=ACCENT_BLUE,
+            relief="flat", borderwidth=0,
+            wrap="none",
+        )
+        vsb_resp = ttk.Scrollbar(resp_frame, orient="vertical",   command=self._response_box.yview)
+        hsb_resp = ttk.Scrollbar(resp_frame, orient="horizontal", command=self._response_box.xview)
+        self._response_box.configure(yscrollcommand=vsb_resp.set, xscrollcommand=hsb_resp.set)
+        vsb_resp.grid(row=0, column=1, sticky="ns")
+        hsb_resp.grid(row=1, column=0, sticky="ew")
+        self._response_box.grid(row=0, column=0, sticky="nsew")
+        self._response_box.configure(state="disabled")
 
     def _format_request_title(
         self,
@@ -668,7 +846,8 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
 
         self._pending = pending
         text = pending.display_text or pending.raw.decode("utf-8", errors="replace")
-        self._set_editor_text(text)
+        self._set_editor_text(text, editable=True)
+        self._set_response_text("")
         self._editor_lbl.configure(text=self._format_request_title(
             req_id=pending.id,
             method=pending.parsed.method,

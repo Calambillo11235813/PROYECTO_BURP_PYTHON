@@ -41,6 +41,8 @@ class RequestRecord:
         raw_request   (bytes)    : Bytes crudos completos de la petición.
         response_status (str)    : Primera línea de la respuesta (ej: "HTTP/1.1 200 OK").
         response_raw  (bytes)    : Bytes completos de la respuesta.
+        response_headers (dict)  : Cabeceras de la respuesta parseadas.
+        response_body (bytes)    : Cuerpo crudo de la respuesta.
         duration_ms   (float)    : Tiempo de round-trip en milisegundos.
         client_ip     (str)      : IP del cliente que originó la petición.
     """
@@ -55,6 +57,8 @@ class RequestRecord:
     raw_request     : bytes     = b""
     response_status : str       = ""
     response_raw    : bytes     = b""
+    response_headers: dict      = field(default_factory=dict)
+    response_body   : bytes     = b""
     display_request : str       = ""
     display_response: str       = ""
     duration_ms     : float     = 0.0

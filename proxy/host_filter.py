@@ -30,6 +30,7 @@ class HostFilter:
         self._lock = threading.RLock()
         self._mode = FILTER_MODE_BLACKLIST
         self._patterns: list[str] = []
+        self._ignore_paths: list[str] = []
         # En blacklist: bypass = reenviar silenciosamente, drop = bloquear.
         self._blacklist_action = FILTER_DECISION_BYPASS
 
@@ -81,7 +82,40 @@ class HostFilter:
         with self._lock:
             return list(self._patterns)
 
-    def decide(self, host: str, port: int) -> str:
+    # ── Rutas Ignoradas (Path Filtering) ─────────────────────
+
+    def add_ignore_path(self, pattern: str) -> bool:
+        normalized = self._normalize_pattern(pattern)
+        if not normalized:
+            return False
+        with self._lock:
+            if normalized in self._ignore_paths:
+                return False
+            self._ignore_paths.append(normalized)
+            return True
+
+    def remove_ignore_path(self, pattern: str) -> bool:
+        normalized = self._normalize_pattern(pattern)
+        if not normalized:
+            return False
+        with self._lock:
+            try:
+                self._ignore_paths.remove(normalized)
+                return True
+            except ValueError:
+                return False
+
+    def clear_ignore_paths(self) -> None:
+        with self._lock:
+            self._ignore_paths.clear()
+
+    def get_ignore_paths(self) -> list[str]:
+        with self._lock:
+            return list(self._ignore_paths)
+
+    # ── Evaluación ──────────────────────────────────────────
+
+    def decide(self, host: str, port: int, path: str = "/") -> str:
         """
         Retorna una decisión para el request:
             show   -> mostrar en UI/historial e interceptar si aplica.
@@ -90,9 +124,15 @@ class HostFilter:
         """
         with self._lock:
             patterns = list(self._patterns)
+            ignore_paths = list(self._ignore_paths)
             mode = self._mode
             blacklist_action = self._blacklist_action
 
+        # 1. Filtro por ruta ignorada (BYPASS siempre)
+        if self._path_matches(path, ignore_paths):
+            return FILTER_DECISION_BYPASS
+
+        # 2. Filtro de host
         if not patterns:
             return FILTER_DECISION_SHOW
 
@@ -116,6 +156,15 @@ class HostFilter:
                     return True
                 continue
             if fnmatch.fnmatchcase(host_lower, pattern):
+                return True
+        return False
+
+    def _path_matches(self, path: str, patterns: list[str]) -> bool:
+        """Comprueba si la ruta HTTP coincide con algún patrón de ignore_paths."""
+        path = path.split("?")[0]  # Ignorar query parameters para el match visual
+        path_lower = (path or "/").lower()
+        for pattern in patterns:
+            if fnmatch.fnmatchcase(path_lower, pattern):
                 return True
         return False
 

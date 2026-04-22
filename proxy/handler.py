@@ -76,12 +76,12 @@ class PendingRequest:
     _decision    : str   = field(default="", init=False, repr=False)
     _modified_raw: bytes = field(default=b"", init=False, repr=False)
 
-    def wait(self, timeout: float = 60.0) -> tuple[str, bytes]:
+    def wait(self, timeout: float | None = None) -> tuple[str, bytes]:
         """
         Bloquea el hilo del handler hasta recibir una decisión.
 
         Args:
-            timeout (float): Segundos máximos de espera. Default 60s.
+            timeout (float|None): Segundos máximos de espera. Default None (infinito).
 
         Returns:
             tuple[str, bytes]: ("forward" | "drop" | "timeout", raw_a_usar)
@@ -141,8 +141,18 @@ class InterceptController:
         self.intercept_enabled = True
 
     def disable(self) -> None:
-        """Desactiva la intercepción. Las peticiones fluyen directamente."""
+        """Desactiva la intercepción. Las peticiones fluyen directamente y se purga la cola."""
         self.intercept_enabled = False
+        self.flush_queue()
+
+    def flush_queue(self) -> None:
+        """Libera (forward as-is) a todas las peticiones atrapadas en la cola instantáneamente."""
+        while not self._queue.empty():
+            try:
+                pending = self._queue.get_nowait()
+                pending.forward()
+            except queue.Empty:
+                break
 
     def intercept(
         self,
@@ -231,7 +241,11 @@ class ConnectionHandler:
     ) -> None:
         """
         Orquesta el ciclo completo para una conexión:
-            recv → parse → [intercept?] → forward/tunnel → log → history.
+            recv → parse → [filtro] → [intercept?] → forward/tunnel → log → history.
+
+        El bloque externo captura cualquier excepción inesperada (p.ej. durante
+        el filtrado de hosts) y devuelve un 500 al navegador en lugar de dejar
+        la conexión colgada indefinidamente.
 
         Args:
             client_socket  (socket.socket)  : Socket abierto con el navegador.
@@ -248,8 +262,21 @@ class ConnectionHandler:
             if not parsed:
                 return
 
-            # Filtrado de dominio antes de interceptar o dibujar en historial.
-            filter_decision = self.host_filter.decide(parsed.host, parsed.port)
+            # Normalizar request: URLs absolutas → relativas y forzar Connection: close
+            raw = self._normalize_proxy_request(raw, parsed)
+
+            # ── Filtrado de dominio y ruta ──────────────────────────────────
+            # Se ejecuta bajo un try propio para que un fallo del filtro
+            # (ej. RuntimeError por concurrencia) no deje el navegador colgado.
+            try:
+                filter_decision = self.host_filter.decide(parsed.host, parsed.port, parsed.path)
+            except Exception as filter_exc:
+                print(
+                    f"{Colors.RED}[ERROR] Filtro de host falló: {filter_exc}. "
+                    f"Tratando conexión como SHOW.{Colors.RESET}"
+                )
+                filter_decision = FILTER_DECISION_SHOW  # degradación segura
+
             if filter_decision == FILTER_DECISION_DROP:
                 self._drop_silently(client_socket)
                 return
@@ -264,6 +291,8 @@ class ConnectionHandler:
             response    = b""
             display_response = ""
             resp_status = ""
+            response_headers: dict[str, str] = {}
+            response_body = b""
             t_start     = time.perf_counter()
             pending_record_created = False
 
@@ -280,6 +309,8 @@ class ConnectionHandler:
                     raw_request=raw,
                     response_status="PENDIENTE",
                     response_raw=b"",
+                    response_headers={},
+                    response_body=b"",
                     display_request=display_request,
                     display_response="",
                     duration_ms=0.0,
@@ -294,7 +325,12 @@ class ConnectionHandler:
                     f"{Colors.YELLOW}[INTERCEPT #{req_id}] Petición pausada. "
                     f"Esperando decisión...{Colors.RESET}"
                 )
-                decision, raw = pending.wait(timeout=60.0)
+                # ⚠️ IMPORTANTE: desactivar el timeout del socket del CLIENTE
+                # durante la espera interactiva, o el browser cerrara la conexion
+                # mientras el usuario piensa y el sendall fallara silenciosamente.
+                client_socket.settimeout(None)  # bloqueo sin limite
+                decision, raw = pending.wait(timeout=None)
+                client_socket.settimeout(CONNECTION_TIMEOUT)  # restaurar
 
                 if decision == "drop":
                     print(f"{Colors.RED}[INTERCEPT #{req_id}] Descartada.{Colors.RESET}")
@@ -305,6 +341,8 @@ class ConnectionHandler:
                         req_id,
                         response_status="HTTP/1.1 403 Forbidden",
                         response_raw=b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+                        response_headers={"Content-Length": "0"},
+                        response_body=b"",
                         duration_ms=(time.perf_counter() - t_start) * 1000,
                     )
                     return
@@ -312,7 +350,10 @@ class ConnectionHandler:
                 if decision == "timeout":
                     print(f"{Colors.YELLOW}[INTERCEPT #{req_id}] Timeout → original.{Colors.RESET}")
                 else:
-                    print(f"{Colors.GREEN}[INTERCEPT #{req_id}] Reenviando.{Colors.RESET}")
+                    print(
+                        f"{Colors.GREEN}[INTERCEPT #{req_id}] Reenviando al "
+                        f"servidor objetivo (Payload: {len(raw)} bytes).{Colors.RESET}"
+                    )
 
             # ── Reenvío / MITM ──────────────────────────────────────────
             if parsed.method.upper() == "CONNECT":
@@ -343,9 +384,18 @@ class ConnectionHandler:
             else:
                 response = self._forward_request(parsed.host, parsed.port, raw) or b""
                 if response:
+                    response_headers, response_body = _split_http_response(response)
                     display_response = build_display_http_message(response)
                     self._log_response(req_id, response)
-                    client_socket.sendall(response)
+                    # Verificación explícita antes de enviar + captura de OSError
+                    # por si el navegador cerró la conexión mientras esperaba.
+                    try:
+                        client_socket.sendall(response)
+                    except OSError as send_exc:
+                        print(
+                            f"{Colors.YELLOW}[WARN] No se pudo devolver respuesta "
+                            f"al navegador (conexión cerrada): {send_exc}{Colors.RESET}"
+                        )
                     try:
                         resp_status = (
                             response.split(b"\r\n")[0]
@@ -366,6 +416,8 @@ class ConnectionHandler:
                     raw_request=raw,
                     response_status=resp_status,
                     response_raw=response,
+                    response_headers=response_headers,
+                    response_body=response_body,
                     display_request=display_request,
                     display_response=display_response,
                     duration_ms=duration_ms,
@@ -379,6 +431,8 @@ class ConnectionHandler:
                     headers=parsed.headers, body=parsed.body,
                     raw_request=raw, response_status=resp_status,
                     response_raw=response,
+                    response_headers=response_headers,
+                    response_body=response_body,
                     display_request=display_request,
                     display_response=display_response,
                     duration_ms=duration_ms,
@@ -390,7 +444,19 @@ class ConnectionHandler:
         except ConnectionResetError:
             pass
         except Exception as exc:
-            print(f"{Colors.RED}[ERROR] Handler: {exc}{Colors.RESET}")
+            # Error inesperado (ej. RuntimeError en filtrado, parseo malformado…).
+            # Intentar devolver un 500 al navegador para que no quede colgado.
+            print(f"{Colors.RED}[ERROR] Handler inesperado: {exc}{Colors.RESET}")
+            try:
+                client_socket.sendall(
+                    b"HTTP/1.1 500 Internal Proxy Error\r\n"
+                    b"Content-Type: text/plain\r\n"
+                    b"Content-Length: 21\r\n"
+                    b"Connection: close\r\n\r\n"
+                    b"Internal Proxy Error."
+                )
+            except OSError:
+                pass  # el cliente ya cerró, ignorar
         finally:
             # socket puede estar ya cerrado por MitmHandler o relay threads
             try:
@@ -405,6 +471,34 @@ class ConnectionHandler:
         with self._lock:
             self._count += 1
             return self._count
+
+    @staticmethod
+    def _normalize_proxy_request(raw: bytes, parsed: ParsedRequest) -> bytes:
+        """
+        Adapta la petición para enviarla de forma segura al servidor real.
+        1. Convierte la URL absoluta a ruta relativa (evita bugs en NodeJS/Express).
+        2. Fuerza 'Connection: close' para evitar que el navegador y el servidor
+           asuman Keep-Alive, ya que este proxy cierra la conexión al finalizar.
+        """
+        if raw.startswith(parsed.method.encode("ascii") + b" http://"):
+            first_line_end = raw.find(b"\r\n")
+            first_line = raw[:first_line_end]
+            parts = first_line.split(b" ")
+            if len(parts) >= 3:
+                new_first_line = b"%b %b %b" % (
+                    parts[0],
+                    parsed.path.encode("ascii", errors="replace"),
+                    parts[2]
+                )
+                raw = new_first_line + raw[first_line_end:]
+
+        # Forzar Connection: close eliminando keep-alives
+        # Reemplazamos de forma segura las cabeceras comunes de conexión HTTP
+        raw = raw.replace(b"Proxy-Connection: keep-alive", b"Connection: close")
+        raw = raw.replace(b"Connection: keep-alive", b"Connection: close")
+        raw = raw.replace(b"Proxy-Connection: Keep-Alive", b"Connection: close")
+        raw = raw.replace(b"Connection: Keep-Alive", b"Connection: close")
+        return raw
 
     def _receive_all(self, sock: socket.socket) -> bytes:
         """
@@ -425,6 +519,10 @@ class ConnectionHandler:
         Abre un socket hacia el servidor real, envía la petición y retorna
         la respuesta completa.
 
+        El socket del servidor se cierra en un bloque `finally` para
+        garantizar liberación de recursos incluso si _recv_http_message
+        lanza una excepción interna.
+
         Args:
             host (str)  : Hostname del servidor destino.
             port (int)  : Puerto del servidor destino.
@@ -433,17 +531,24 @@ class ConnectionHandler:
         Returns:
             bytes | None: Respuesta completa, o None si hubo un error.
         """
+        srv: socket.socket | None = None
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.settimeout(CONNECTION_TIMEOUT)
             srv.connect((host, port))
             srv.sendall(raw)
             response = _recv_http_message(srv, is_response=True)
-            srv.close()
             return response
         except Exception as exc:
             print(f"{Colors.RED}[ERROR] Forward {host}:{port} → {exc}{Colors.RESET}")
             return None
+        finally:
+            # Cierre garantizado: evita descriptor leaks si recv falla.
+            if srv is not None:
+                try:
+                    srv.close()
+                except OSError:
+                    pass
 
     def _handle_https_tunnel(
         self,
@@ -514,7 +619,10 @@ class ConnectionHandler:
 
         response = self._forward_request(parsed.host, parsed.port, raw) or b""
         if response:
-            client_socket.sendall(response)
+            try:
+                client_socket.sendall(response)
+            except OSError:
+                pass
 
     @staticmethod
     def _drop_silently(client_socket: socket.socket) -> None:
@@ -573,6 +681,34 @@ def _normalize_text(value: str) -> str:
     return value.replace("\r\n", "\n").strip()
 
 
+def _split_http_response(raw_response: bytes) -> tuple[dict[str, str], bytes]:
+    """
+    Separa cabeceras y body de una respuesta HTTP cruda.
+
+    Returns:
+        tuple[dict[str, str], bytes]: (headers_parseadas, body_bytes)
+    """
+    if not raw_response:
+        return {}, b""
+
+    separator = b"\r\n\r\n"
+    idx = raw_response.find(separator)
+    if idx == -1:
+        return {}, b""
+
+    header_blob = raw_response[:idx].decode("iso-8859-1", errors="replace")
+    body = raw_response[idx + len(separator):]
+    headers: dict[str, str] = {}
+
+    for line in header_blob.split("\r\n")[1:]:
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        headers[key.strip()] = value.strip()
+
+    return headers, body
+
+
 def _recv_http_message(sock: socket.socket, is_response: bool) -> bytes:
     """
     Lee un mensaje HTTP completo evitando truncados por límites de chunk TCP.
@@ -591,6 +727,17 @@ def _recv_http_message(sock: socket.socket, is_response: bool) -> bytes:
     header_bytes = data[:header_end]
     body = data[header_end + 4:]
     headers_text = header_bytes.decode("iso-8859-1", errors="replace")
+
+    # RFC 7230: Las respuestas 1xx, 204 y 304 NUNCA tienen body.
+    # Evita que el navegador o proxy esperen datos que no llegarán.
+    if is_response:
+        try:
+            first_line = headers_text.split("\r\n")[0]
+            status_code = int(first_line.split()[1])
+            if (100 <= status_code < 200) or status_code in (204, 304):
+                return header_bytes + b"\r\n\r\n"
+        except Exception:
+            pass
 
     if _has_chunked_encoding(headers_text):
         body = _read_chunked_body(sock, body)
@@ -624,13 +771,30 @@ def _recv_chunk(sock: socket.socket) -> bytes:
 
 
 def _read_until_timeout(sock: socket.socket) -> bytes:
-    out = b""
-    while True:
-        chunk = _recv_chunk(sock)
-        if not chunk:
-            break
-        out += chunk
-    return out
+    """
+    Lee hasta que el servidor cierra la conexión o hay timeout.
+
+    Para respuestas sin Content-Length ni chunked (ej. HTTP/1.0 o respuestas
+    de error simples), usamos un timeout corto (2 s) en vez del timeout
+    global del socket (10 s) para no congelar el navegador innecesariamente.
+    El timeout del socket se restaura al finalizar.
+    """
+    _SHORT_TIMEOUT = 2.0  # segundos máximos esperando más datos
+    original_timeout = sock.gettimeout()
+    try:
+        sock.settimeout(_SHORT_TIMEOUT)
+        out = b""
+        while True:
+            chunk = _recv_chunk(sock)
+            if not chunk:
+                break
+            out += chunk
+        return out
+    finally:
+        try:
+            sock.settimeout(original_timeout)
+        except OSError:
+            pass
 
 
 def _has_chunked_encoding(headers_text: str) -> bool:

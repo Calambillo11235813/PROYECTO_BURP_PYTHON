@@ -79,6 +79,8 @@ class ProxyServer:
             "blacklist": [],
             "whitelist": [],
         }
+        self._ignore_paths: list[str] = []
+        self._filter_lock = threading.Lock()  # protege _filter_rules y _ignore_paths
         self.certs     = CertsManager()   # genera la CA si no existe
         self._handler  = ConnectionHandler(
             self.history,
@@ -110,12 +112,13 @@ class ProxyServer:
         if not normalized:
             return False
 
-        mode = self.host_filter.mode
-        rules = self._filter_rules[mode]
-        if normalized in rules:
-            return False
+        with self._filter_lock:
+            mode = self.host_filter.mode
+            rules = self._filter_rules[mode]
+            if normalized in rules:
+                return False
+            rules.append(normalized)
 
-        rules.append(normalized)
         self._sync_active_rules_to_host_filter()
         return True
 
@@ -124,28 +127,61 @@ class ProxyServer:
         if not normalized:
             return False
 
-        mode = self.host_filter.mode
-        rules = self._filter_rules[mode]
-        try:
-            rules.remove(normalized)
-        except ValueError:
-            return False
+        with self._filter_lock:
+            mode = self.host_filter.mode
+            rules = self._filter_rules[mode]
+            try:
+                rules.remove(normalized)
+            except ValueError:
+                return False
 
         self._sync_active_rules_to_host_filter()
         return True
 
     def clear_filter_patterns(self) -> None:
-        self._filter_rules[self.host_filter.mode] = []
+        with self._filter_lock:
+            self._filter_rules[self.host_filter.mode] = []
         self._sync_active_rules_to_host_filter()
 
     def get_filter_patterns(self) -> list[str]:
-        return list(self._filter_rules[self.host_filter.mode])
+        with self._filter_lock:
+            return list(self._filter_rules[self.host_filter.mode])
 
     def get_filter_patterns_for_mode(self, mode: str) -> list[str]:
         normalized_mode = self._normalize_mode(mode)
         if not normalized_mode:
             return []
-        return list(self._filter_rules[normalized_mode])
+        with self._filter_lock:
+            return list(self._filter_rules[normalized_mode])
+
+    # ── Wrapper Methods para Ignore Paths (Path Filtering) ──
+
+    def add_ignore_path(self, pattern: str) -> bool:
+        normalized = self._normalize_pattern(pattern)
+        if not normalized: return False
+        with self._filter_lock:
+            if normalized in self._ignore_paths: return False
+            self._ignore_paths.append(normalized)
+        self._sync_active_rules_to_host_filter()
+        return True
+
+    def remove_ignore_path(self, pattern: str) -> bool:
+        normalized = self._normalize_pattern(pattern)
+        if not normalized: return False
+        with self._filter_lock:
+            try: self._ignore_paths.remove(normalized)
+            except ValueError: return False
+        self._sync_active_rules_to_host_filter()
+        return True
+
+    def clear_ignore_paths(self) -> None:
+        with self._filter_lock:
+            self._ignore_paths.clear()
+        self._sync_active_rules_to_host_filter()
+
+    def get_ignore_paths(self) -> list[str]:
+        with self._filter_lock:
+            return list(self._ignore_paths)
 
     def get_filter_config_path(self) -> str:
         return str(self._filter_config_path)
@@ -177,6 +213,7 @@ class ProxyServer:
                 "blacklist": [],
                 "whitelist": [],
             }
+            ignore_paths: list[str] = []
             section = ""
 
             with path.open("r", encoding="utf-8") as fh:
@@ -216,7 +253,16 @@ class ProxyServer:
                             rules[section].append(normalized_pattern)
                         continue
 
-            self._filter_rules = rules
+                    if section == "ignore_paths":
+                        normalized_pattern = self._normalize_pattern(line)
+                        if normalized_pattern and normalized_pattern not in ignore_paths:
+                            ignore_paths.append(normalized_pattern)
+                        continue
+
+            with self._filter_lock:
+                self._filter_rules = rules
+                self._ignore_paths = ignore_paths
+
             self.host_filter.set_mode(mode)
             self._sync_active_rules_to_host_filter()
 
@@ -244,6 +290,11 @@ class ProxyServer:
                 fh.write("\n[whitelist]\n")
                 for pattern in self._filter_rules["whitelist"]:
                     fh.write(f"{pattern}\n")
+
+                fh.write("\n[ignore_paths]\n")
+                with self._filter_lock:
+                    for pattern in self._ignore_paths:
+                        fh.write(f"{pattern}\n")
         except OSError:
             return
 
@@ -259,11 +310,19 @@ class ProxyServer:
         return ""
 
     def _sync_active_rules_to_host_filter(self) -> None:
-        """Copia al motor de filtrado solo las reglas del modo activo."""
-        mode = self.host_filter.mode
+        """Copia al motor de filtrado solo las reglas del modo activo (thread-safe)."""
+        with self._filter_lock:
+            mode = self.host_filter.mode
+            patterns = list(self._filter_rules[mode])
+            ignore_paths = list(self._ignore_paths)
+            
         self.host_filter.clear_patterns()
-        for pattern in self._filter_rules[mode]:
+        for pattern in patterns:
             self.host_filter.add_pattern(pattern)
+            
+        self.host_filter.clear_ignore_paths()
+        for pattern in ignore_paths:
+            self.host_filter.add_ignore_path(pattern)
 
     # ── Ciclo de vida ────────────────────────────────────────────────────────
 
