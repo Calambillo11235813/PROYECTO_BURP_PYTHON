@@ -5,7 +5,7 @@ Ventana principal de Mini-Burp Suite.
 
 Estructura:
     - Header: logo, estado del proxy, créditos.
-    - CTkTabview: pestañas Proxy, Repeater, Intruder.
+    - CTkTabview: pestañas Proxy, Repeater, Intruder, Reportings.
     - Status bar: contador de peticiones y estado del intercept.
 
 Autores: Diogo Nicolas Rodriguez Gomez, Javier Soliz Rueda
@@ -21,6 +21,8 @@ from proxy.server import ProxyServer
 from .proxy_tab import ProxyTab
 from .repeater_tab import RepeaterTab
 from .intruder_tab import IntruderTab
+from .reporting_tab import ReportingTab
+from .header import HeaderFrame
 from .colors import (
     BG_DARK, BG_SECONDARY, ACCENT_BLUE, ACCENT_GREEN,
     ACCENT_RED, TEXT_PRIMARY, TEXT_MUTED, BORDER,
@@ -48,7 +50,7 @@ class App(ctk.CTk):
     def __init__(self, proxy: ProxyServer) -> None:
         super().__init__()
         self.proxy = proxy
-
+     
         self._configure_window()
         self._build_header()
         self._build_tabs()
@@ -72,47 +74,19 @@ class App(ctk.CTk):
     # ── Header ─────────────────────────────────────────────────────────────────
 
     def _build_header(self) -> None:
-        """Barra superior con logo, estado del proxy y créditos."""
-        header = ctk.CTkFrame(
-            self, fg_color=BG_SECONDARY, corner_radius=0, height=52,
+        """Barra superior con logo, estado del proxy y navegación."""
+        self._header = HeaderFrame(
+            self,
+            proxy_host=self.proxy.host,
+            proxy_port=self.proxy.port,
+            on_tab_select=self._on_tab_select
         )
-        header.pack(fill="x", side="top")
-        header.pack_propagate(False)
+        self._header.pack(fill="x", side="top")
 
-        # Logo / título
-        ctk.CTkLabel(
-            header,
-            text="⚡ Mini-Burp Suite",
-            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
-            text_color=ACCENT_BLUE,
-        ).pack(side="left", padx=18, pady=10)
-
-        # Separador
-        tk.Frame(header, bg=BORDER, width=1).pack(side="left", fill="y", pady=8)
-
-        # Estado del proxy
-        self._proxy_status = ctk.CTkLabel(
-            header,
-            text=f"●  Proxy activo  │  {self.proxy.host}:{self.proxy.port}",
-            font=ctk.CTkFont(family="Consolas", size=12),
-            text_color=ACCENT_GREEN,
-        )
-        self._proxy_status.pack(side="left", padx=16)
-
-        # Créditos (derecha)
-        ctk.CTkLabel(
-            header,
-            text="Ingeniería de Software 2  │  SW2-2026",
-            font=ctk.CTkFont(size=11),
-            text_color=TEXT_MUTED,
-        ).pack(side="right", padx=18)
-
-        # Versión (derecha)
-        ctk.CTkLabel(
-            header, text="v2.0",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=TEXT_MUTED,
-        ).pack(side="right", padx=4)
+    def _on_tab_select(self, tab_name: str) -> None:
+        """Callback al hacer clic en las pestañas del Header."""
+        if hasattr(self, "_tab_view"):
+            self._tab_view.set(f"  {tab_name}  ")
 
     # ── Tab View ───────────────────────────────────────────────────────────────
 
@@ -154,6 +128,21 @@ class App(ctk.CTk):
         )
         self._intruder_tab.pack(fill="both", expand=True)
 
+        # ── Pestaña Reporting ──────────────────────────────────────────────────
+        self._tab_view.add("  Reporting  ")
+        self._reporting_tab = ReportingTab(
+            master=self._tab_view.tab("  Reporting  "),
+        )
+        self._reporting_tab.pack(fill="both", expand=True)
+
+        # Enlazar el botón de escaneo pasivo con el historial actual
+        self._reporting_tab.btn_scan.configure(
+            command=lambda: self._reporting_tab.run_analysis(self.proxy.history.all())
+        )
+
+        # Ocultar los botones nativos DESPUÉS de añadir todas las pestañas
+        self._tab_view._segmented_button.grid_remove()
+
     # ── API pública de navegación entre pestañas ────────────────────────
 
     def switch_to_repeater(self, raw_request: str) -> None:
@@ -167,6 +156,7 @@ class App(ctk.CTk):
         """
         self._repeater_tab.load_request(raw_request)
         self._tab_view.set("  Repeater  ")
+        self._header.select_tab("Repeater")
 
     def switch_to_intruder(self, raw_request: str) -> None:
         """
@@ -177,6 +167,7 @@ class App(ctk.CTk):
         """
         self._intruder_tab.load_request(raw_request)
         self._tab_view.set("  Intruder  ")
+        self._header.select_tab("Intruder")
 
     # ── Placeholder (módulos futuros) ────────────────────────────────────────
 

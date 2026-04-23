@@ -1,7 +1,7 @@
 """
 gui/colors.py
 -------------
-Paleta de colores centralizada para toda la GUI de Mini-Burp Suite.
+Paleta de colores centralizada para toda la GUI de NetLens.
 
 Inspirada en el tema oscuro de GitHub (github-dark) para una apariencia
 profesional y coherente en todos los componentes.

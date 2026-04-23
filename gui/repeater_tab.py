@@ -23,10 +23,13 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from tkinter import ttk
 
 import customtkinter as ctk
 
+from logic.http_body import build_display_http_message
 from repeater import Repeater, RepeaterResponse
+from .utils import apply_syntax_highlighting
 from .colors import (
     BG_DARK, BG_SECONDARY, BG_HOVER,
     ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW,
@@ -34,8 +37,8 @@ from .colors import (
 )
 
 # ── Constantes de layout ───────────────────────────────────────────────────────
-EDITOR_FONT    = ("Consolas", 12)
-LABEL_FONT_SZ  = 12
+EDITOR_FONT    = ("Consolas", 11)
+LABEL_FONT_SZ  = 11
 BTN_SEND_WIDTH = 110
 BTN_SEND_H     = 36
 
@@ -134,89 +137,92 @@ class RepeaterTab(ctk.CTkFrame):
 
     def _build_panels(self) -> None:
         """
-        Dos paneles lado a lado: Request (izquierda) y Response (derecha).
-        Separados por un PanedWindow horizontal para que el usuario
-        pueda redimensionarlos libremente.
+        Panel dual Request / Response con layout grid correcto (estilo IDE).
+        Idéntico al panel inferior de ProxyTab.
         """
-        paned = tk.PanedWindow(
-            self, orient=tk.HORIZONTAL,
-            bg=BG_DARK, sashwidth=6, sashrelief="flat",
+        container = tk.Frame(self, bg=BG_SECONDARY)
+        container.pack(fill="both", expand=True)
+
+        container.grid_rowconfigure(0, weight=0)
+        container.grid_rowconfigure(1, weight=1)
+        # Dos columnas iguales al 50/50
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_columnconfigure(1, weight=1)
+
+        # ── Encabezado izquierdo (Request) ──
+        header_left = tk.Frame(container, bg=BG_SECONDARY, height=28)
+        header_left.grid(row=0, column=0, sticky="ew", padx=(8, 4), pady=(4, 2))
+        header_left.pack_propagate(False)
+
+        tk.Label(
+            header_left,
+            text="📤  Request",
+            font=("Consolas", 10, "bold"),
+            fg=TEXT_MUTED,
+            bg=BG_SECONDARY,
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
+        # ── Encabezado derecho (Response) ──
+        header_right = tk.Frame(container, bg=BG_SECONDARY, height=28)
+        header_right.grid(row=0, column=1, sticky="ew", padx=(4, 8), pady=(4, 2))
+        header_right.pack_propagate(False)
+
+        tk.Label(
+            header_right,
+            text="📥  Response",
+            font=("Consolas", 10, "bold"),
+            fg=TEXT_MUTED,
+            bg=BG_SECONDARY,
+            anchor="w",
+        ).pack(side="left")
+
+        # ── Textbox Request (editable) ──
+        req_frame = tk.Frame(container, bg=BORDER)
+        req_frame.grid(row=1, column=0, sticky="nsew", padx=(8, 3), pady=(0, 6))
+        req_frame.grid_rowconfigure(0, weight=1)
+        req_frame.grid_columnconfigure(0, weight=1)
+
+        self._request_box = tk.Text(
+            req_frame,
+            font=("Consolas", 11),
+            bg=BG_DARK, fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            selectbackground=ACCENT_BLUE,
+            relief="flat", borderwidth=0,
+            wrap="none", undo=True,
         )
-        paned.pack(fill="both", expand=True)
+        # Resaltado al editar
+        self._request_box.bind("<KeyRelease>", self._on_request_edit)
+        
+        vsb_req = ttk.Scrollbar(req_frame, orient="vertical",   command=self._request_box.yview)
+        hsb_req = ttk.Scrollbar(req_frame, orient="horizontal", command=self._request_box.xview)
+        self._request_box.configure(yscrollcommand=vsb_req.set, xscrollcommand=hsb_req.set)
+        vsb_req.grid(row=0, column=1, sticky="ns")
+        hsb_req.grid(row=1, column=0, sticky="ew")
+        self._request_box.grid(row=0, column=0, sticky="nsew")
 
-        # ── Panel Request ──────────────────────────────────────────────────
-        req_frame = ctk.CTkFrame(paned, fg_color=BG_SECONDARY, corner_radius=8)
-        paned.add(req_frame, minsize=300)
-        self._build_request_panel(req_frame)
+        # ── Textbox Response (solo lectura) ──
+        resp_frame = tk.Frame(container, bg=BORDER)
+        resp_frame.grid(row=1, column=1, sticky="nsew", padx=(3, 8), pady=(0, 6))
+        resp_frame.grid_rowconfigure(0, weight=1)
+        resp_frame.grid_columnconfigure(0, weight=1)
 
-        # ── Panel Response ─────────────────────────────────────────────────
-        resp_frame = ctk.CTkFrame(paned, fg_color=BG_SECONDARY, corner_radius=8)
-        paned.add(resp_frame, minsize=300)
-        self._build_response_panel(resp_frame)
-
-    def _build_request_panel(self, parent: ctk.CTkFrame) -> None:
-        """Panel izquierdo: etiqueta + CTkTextbox editable."""
-        self._build_panel_header(parent, "📤  Request", side="left")
-
-        self._request_box = ctk.CTkTextbox(
-            parent,
-            font=ctk.CTkFont(family=EDITOR_FONT[0], size=EDITOR_FONT[1]),
-            fg_color=BG_DARK,
-            text_color=TEXT_PRIMARY,
-            border_color=BORDER,
-            border_width=1,
-            wrap="none",
-            corner_radius=6,
+        self._response_box = tk.Text(
+            resp_frame,
+            font=("Consolas", 11),
+            bg=BG_DARK, fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            selectbackground=ACCENT_BLUE,
+            relief="flat", borderwidth=0,
+            wrap="none", state="disabled",
         )
-        self._request_box.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-    def _build_response_panel(self, parent: ctk.CTkFrame) -> None:
-        """Panel derecho: etiqueta + CTkTextbox de solo lectura."""
-        self._resp_header_lbl = self._build_panel_header(
-            parent, "📥  Response", side="left",
-        )
-
-        self._response_box = ctk.CTkTextbox(
-            parent,
-            font=ctk.CTkFont(family=EDITOR_FONT[0], size=EDITOR_FONT[1]),
-            fg_color=BG_DARK,
-            text_color=TEXT_PRIMARY,
-            border_color=BORDER,
-            border_width=1,
-            wrap="none",
-            corner_radius=6,
-            state="disabled",   # solo lectura; se activa momentáneamente para escribir
-        )
-        self._response_box.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-    def _build_panel_header(
-        self,
-        parent: ctk.CTkFrame,
-        title : str,
-        side  : str = "left",
-    ) -> ctk.CTkLabel:
-        """
-        Crea la barra de título de un panel (Request o Response).
-
-        Args:
-            parent : Frame contenedor.
-            title  : Texto del encabezado.
-            side   : Alineación del pack ('left' o 'right').
-
-        Returns:
-            El CTkLabel creado (para poder actualizarlo después).
-        """
-        header = ctk.CTkFrame(parent, fg_color="transparent", height=32)
-        header.pack(fill="x", padx=8, pady=(8, 2))
-        header.pack_propagate(False)
-
-        lbl = ctk.CTkLabel(
-            header, text=title,
-            font=ctk.CTkFont(size=LABEL_FONT_SZ, weight="bold"),
-            text_color=TEXT_MUTED,
-        )
-        lbl.pack(side=side)
-        return lbl
+        vsb_resp = ttk.Scrollbar(resp_frame, orient="vertical",   command=self._response_box.yview)
+        hsb_resp = ttk.Scrollbar(resp_frame, orient="horizontal", command=self._response_box.xview)
+        self._response_box.configure(yscrollcommand=vsb_resp.set, xscrollcommand=hsb_resp.set)
+        vsb_resp.grid(row=0, column=1, sticky="ns")
+        hsb_resp.grid(row=1, column=0, sticky="ew")
+        self._response_box.grid(row=0, column=0, sticky="nsew")
 
     # ── Lógica de envío ────────────────────────────────────────────────────────
 
@@ -292,18 +298,25 @@ class RepeaterTab(ctk.CTkFrame):
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
+    def _on_request_edit(self, _event: tk.Event) -> None:
+        """Aplica colores en tiempo real mientras el usuario escribe."""
+        apply_syntax_highlighting(self._request_box)
+
     def _set_request_text(self, text: str) -> None:
         """Reemplaza el contenido del panel Request."""
         self._request_box.delete("1.0", "end")
         if text:
             self._request_box.insert("1.0", text)
+            apply_syntax_highlighting(self._request_box)
 
     def _set_response_text(self, text: str) -> None:
         """Reemplaza el contenido del panel Response (momentáneamente editable)."""
         self._response_box.configure(state="normal")
         self._response_box.delete("1.0", "end")
         if text:
-            self._response_box.insert("1.0", text)
+            display = build_display_http_message(text.encode("utf-8", errors="replace"))
+            self._response_box.insert("1.0", display)
+            apply_syntax_highlighting(self._response_box)
         self._response_box.configure(state="disabled")
 
     def _parse_timeout(self) -> int:

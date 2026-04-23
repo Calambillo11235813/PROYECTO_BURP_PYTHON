@@ -1,4 +1,4 @@
-Proyecto: Herramienta de Pruebas de Vulnerabilidades Web (Mini-Burp)
+Proyecto: Herramienta de Pruebas de Vulnerabilidades Web (NetLens)
 Materia: Ingeniería de Software 2
 
 Estudiantes: Diogo Nicolas Rodriguez Gomez, Javier Soliz Rueda
@@ -29,7 +29,9 @@ Permite la manipulación iterativa de peticiones específicas.
 6.  CU-06: Reenvío Manipulado: Edición libre de verbos HTTP, headers y cuerpo para pruebas de seguridad.
 7.  CU-07: Comparativa de Respuestas: Análisis visual de las diferencias entre las respuestas del servidor ante distintos inputs.
 
-Módulo C: Intruder (Automatización/Fuzzing)
+
+
+### Módulo C: Intruder (Automatización/Fuzzing)
 Automatiza la búsqueda de fallos mediante ataques de diccionario.
 8.  CU-08: Definición de Puntos de Inyección: Selección de variables dentro de una petición para ser atacadas.
 9.  CU-09: Gestión de Payloads: Carga de diccionarios de ataque (.txt) con vectores conocidos (SQLi, XSS).

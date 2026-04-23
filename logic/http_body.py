@@ -19,7 +19,11 @@ import gzip
 import re
 import zlib
 
-import brotli
+try:
+    import brotli as _brotli
+    _BROTLI_AVAILABLE = True
+except ImportError:
+    _BROTLI_AVAILABLE = False
 
 _BINARY_PLACEHOLDER = "[Cuerpo Binario / No legible]"
 
@@ -60,6 +64,13 @@ def build_display_http_message(raw: bytes) -> str:
     if not body:
         return header_text
 
+    # De-chunking: debe ejecutarse ANTES de la descompresión.
+    # Si Transfer-Encoding: chunked, el body llega con tamaños hex intercalados.
+    # gzip.decompress fallará si recibe ese formato sin limpiar primero.
+    transfer_encoding = headers.get("transfer-encoding", "")
+    if "chunked" in transfer_encoding.lower():
+        body = _dechunk_body(body)
+
     encoding_value = _resolve_encoding(headers)
     decoded_body, decoded_ok = _decode_content(body, encoding_value)
 
@@ -84,6 +95,54 @@ def _split_http_message(raw: bytes) -> tuple[bytes, bytes]:
     if b"\n\n" in raw:
         return raw.split(b"\n\n", 1)
     return raw, b""
+
+
+def _dechunk_body(data: bytes) -> bytes:
+    """
+    Decodifica un cuerpo HTTP con Transfer-Encoding: chunked (RFC 7230 §4.1).
+
+    Cada bloque tiene el formato::
+
+        <hex_size>\r\n
+        <data_bytes>\r\n
+        ...
+        0\r\n
+        \r\n   (terminador de bloques, opcionalmente trailers)
+
+    Args:
+        data: Bytes crudos del cuerpo chunked (sin las cabeceras HTTP).
+
+    Returns:
+        bytes: Cuerpo reensamblado sin los metadatos de chunking.
+                Si el formato es inesperado, devuelve `data` intacto como
+                degradación segura para no romper la UI.
+    """
+    result = bytearray()
+    pos = 0
+    try:
+        while pos < len(data):
+            # Buscar el final de la línea de tamaño (puede incluir extensiones)
+            line_end = data.find(b"\r\n", pos)
+            if line_end == -1:
+                break
+
+            size_line = data[pos:line_end].split(b";")[0].strip()
+            if not size_line:
+                break
+
+            chunk_size = int(size_line, 16)
+            if chunk_size == 0:
+                break  # Chunk final: fin del cuerpo
+
+            chunk_start = line_end + 2
+            chunk_end   = chunk_start + chunk_size
+            result.extend(data[chunk_start:chunk_end])
+            pos = chunk_end + 2  # Saltar el \r\n al final del chunk
+    except (ValueError, IndexError):
+        # Si el formato es inválido, devuelve los datos sin modificar.
+        return data
+
+    return bytes(result) if result else data
 
 
 def _parse_headers(header_text: str) -> dict[str, str]:
@@ -113,7 +172,10 @@ def _decode_content(body: bytes, content_encoding: str | None) -> tuple[bytes, b
             elif enc == "deflate":
                 current = _decompress_deflate(current)
             elif enc == "br":
-                current = brotli.decompress(current)
+                if _BROTLI_AVAILABLE:
+                    current = _brotli.decompress(current)
+                else:
+                    return body, False
             elif enc == "identity":
                 continue
             else:
