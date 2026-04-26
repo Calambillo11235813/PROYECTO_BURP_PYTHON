@@ -57,7 +57,7 @@ class ProxyEventsMixin:
         if self.proxy.intercept.intercept_enabled:
             self.proxy.intercept.disable()
             self._intercept_btn.configure(
-                text="⬛  Intercept: OFF",
+                text="⬛  Interceptar: OFF",
                 border_color=ACCENT_GREEN,
                 text_color=ACCENT_GREEN,
             )
@@ -72,7 +72,7 @@ class ProxyEventsMixin:
         else:
             self.proxy.intercept.enable()
             self._intercept_btn.configure(
-                text="🔴  Intercept: ON",
+                text="🔴  Interceptar: ON",
                 border_color=ACCENT_RED,
                 text_color=ACCENT_RED,
             )
@@ -230,7 +230,7 @@ class ProxyEventsMixin:
 
         selected = self._tree.selection()
         if not selected:
-            self._btn_repeater.pack_forget()
+            self._actions_menu.pack_forget()
             return
 
         values = self._tree.item(selected[0], "values")
@@ -258,26 +258,32 @@ class ProxyEventsMixin:
             prefix="📋",
         ))
 
-        # Mostrar "Send to Repeater" solo si el callback está registrado
-        if self._repeater_callback is not None:
-            self._btn_repeater.pack(side="left", padx=8, pady=9)
+        # Mostrar menú “Acciones” si al menos un callback está registrado
+        if self._repeater_callback is not None or self._intruder_callback is not None:
+            self._actions_var.set("⚡  Acciones")
+            self._actions_menu.pack(side="left", padx=8, pady=9)
 
-    # ── Send to Repeater (CU-05) ──────────────────────────────────────────────
+    # ── Menú Acciones (CU-05 + Intruder) ─────────────────────────────────────
 
-    def _on_send_to_repeater(self) -> None:
+    def _on_action_selected(self, choice: str) -> None:
         """
-        CU-05: Clona el texto actual del editor y lo envía al Repeater.
+        Dispatcher del menú Acciones.
 
-        Lee el contenido del CTkTextbox y llama al callback registrado
-        (App.switch_to_repeater), que rellena el panel Request del
-        Repeater y cambia el foco a esa pestaña automáticamente.
+        Clona el texto del editor y lo envía al módulo correspondiente
+        (Repeater o Intruder) según la opción elegida, cambiando el
+        foco de pestaña automáticamente.
         """
-        if self._repeater_callback is None:
+        raw_text = self._editor_box.get("1.0", "end-1c").strip()
+        if not raw_text:
             return
 
-        raw_text = self._editor_box.get("1.0", "end-1c")
-        if raw_text.strip():
+        if "Repeater" in choice and self._repeater_callback is not None:
             self._repeater_callback(raw_text)
+        elif "Intruder" in choice and self._intruder_callback is not None:
+            self._intruder_callback(raw_text)
+
+        # Reiniciar el menú al título neutral tras la acción
+        self._actions_var.set("⚡  Acciones")
 
     # ── Auto-scroll ───────────────────────────────────────────────────────────
 

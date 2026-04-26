@@ -60,6 +60,7 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         master              : tk.Widget,
         proxy               : ProxyServer,
         on_send_to_repeater : Optional[Callable[[str], None]] = None,
+        on_send_to_intruder : Optional[Callable[[str], None]] = None,
     ) -> None:
         ctk.CTkFrame.__init__(self, master, fg_color="transparent")
         self.proxy    = proxy
@@ -67,6 +68,7 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         self._seen_ids: set[int] = set()
         self._row_by_id: dict[int, str] = {}
         self._repeater_callback = on_send_to_repeater
+        self._intruder_callback = on_send_to_intruder
         self._filter_mode_var = tk.StringVar(value=self.proxy.get_filter_mode())
         self._filter_domain_var = tk.StringVar(value="")
         self._filter_status_var = tk.StringVar(value="Sin filtros")
@@ -95,7 +97,7 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         # ── Botón Intercept (toggle) ───────────────────────────────────────
         self._intercept_btn = ctk.CTkButton(
             bar,
-            text="⬛  Intercept: OFF",
+            text="⬛  Interceptar: OFF",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=BG_DARK, hover_color=BG_HOVER,
             border_color=ACCENT_GREEN, border_width=2,
@@ -117,7 +119,7 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
 
         # ── Export CSV ────────────────────────────────────────────────────
         ctk.CTkButton(
-            bar, text="💾  Export CSV", width=130, height=32,
+            bar, text="💾  Exportar CSV", width=130, height=32,
             fg_color=BG_HOVER, hover_color="#373e47",
             text_color=TEXT_MUTED, font=ctk.CTkFont(size=12),
             corner_radius=6, command=self._export_csv,
@@ -125,16 +127,21 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
 
         tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", pady=8)
 
-        # ── Send to Repeater (CU-05) — oculto hasta que se seleccione fila ─
-        self._btn_repeater = ctk.CTkButton(
+        # ── Menú desplegable "Acciones" (Repeater / Intruder) ────────────
+        self._actions_var = tk.StringVar(value="⚡  Acciones")
+        self._actions_menu = ctk.CTkOptionMenu(
             bar,
-            text="🔁  Send to Repeater",
-            width=160, height=32,
-            fg_color="#1f3d5c", hover_color="#1a3352",
-            border_color=ACCENT_BLUE, border_width=1,
+            values=["🔁  Enviar al Repeater", "💥  Enviar al Intruder"],
+            variable=self._actions_var,
+            width=175,
+            height=32,
+            fg_color="#1f3d5c",
+            button_color="#1a3352",
+            button_hover_color="#152b45",
             text_color=ACCENT_BLUE,
             font=ctk.CTkFont(size=12, weight="bold"),
-            corner_radius=6, command=self._on_send_to_repeater,
+            corner_radius=6,
+            command=self._on_action_selected,
         )
         # No se hace .pack() aquí — aparece al seleccionar una fila
 
@@ -669,14 +676,14 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         self._editor_lbl.pack(side="left", fill="x", expand=True)
 
         self._btn_forward = ctk.CTkButton(
-            self._btn_frame, text="▶  Forward",
+            self._btn_frame, text="▶  Reenviar",
             width=110, height=26, fg_color=ACCENT_GREEN, hover_color="#2ea843",
             text_color="#ffffff", font=ctk.CTkFont(size=11, weight="bold"),
             corner_radius=6, command=self._on_forward,
         )
         self._btn_drop = ctk.CTkButton(
-            self._btn_frame, text="✕  Drop",
-            width=90, height=26, fg_color=ACCENT_RED, hover_color="#da3633",
+            self._btn_frame, text="✕  Descartar",
+            width=100, height=26, fg_color=ACCENT_RED, hover_color="#da3633",
             text_color="#ffffff", font=ctk.CTkFont(size=11, weight="bold"),
             corner_radius=6, command=self._on_drop,
         )

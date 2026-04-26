@@ -72,12 +72,13 @@ CU-12: Exportación de Resultados: Generación de un informe técnico con las vu
 🐍 Estándar de Codificación (Basado en PEP 8)
 1. Nomenclatura (Naming Conventions)
 
-Elemento,Estilo,Ejemplo
-Clases,PascalCase,class ProxyServer:
-Funciones,snake_case,def capture_request():
-Variables,snake_case,"target_url = ""google.com"""
-Constantes,SCREAMING_SNAKE,DEFAULT_PORT = 8080
-Archivos/Módulos,snake_case,proxy_core.py
+| Elemento        | Estilo               | Ejemplo                               |
+|-----------------|----------------------|---------------------------------------|
+| Clases          | PascalCase           | `class ProxyServer:`                 |
+| Funciones       | snake_case           | `def capture_request():`             |
+| Variables       | snake_case           | `target_url = "google.com"`          |
+| Constantes      | SCREAMING_SNAKE      | `DEFAULT_PORT = 8080`                |
+| Archivos/Módulos| snake_case           | `proxy_core.py`                      |
 
 2. Estructura y Espaciado
 Indentación: Siempre 4 espacios (no uses Tabs, aunque VS Code los suele convertir automáticamente).
@@ -152,6 +153,6 @@ Características de la distribución:
 
 Comando para generar el ejecutable (una vez finalizado el desarrollo):
 
-pyinstaller --onefile --windowed --name MiniburpSuite main.py
+pyinstaller --onefile --windowed --name NetLens  main.py
 
-Esto genera un archivo dist/MiniburpSuite.exe que puede copiarse al escritorio y ejecutarse directamente con doble clic.
+Esto genera un archivo dist/NetLens.exe que puede copiarse al escritorio y ejecutarse directamente con doble clic.

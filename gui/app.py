@@ -20,7 +20,7 @@ import customtkinter as ctk
 from proxy.server import ProxyServer
 from .proxy_tab import ProxyTab
 from .repeater_tab import RepeaterTab
-from .intruder_tab import IntruderTab
+from .intruder_tab_v2 import IntruderTab
 from .reporting_tab import ReportingTab
 from .header import HeaderFrame
 from .colors import (
@@ -111,6 +111,7 @@ class App(ctk.CTk):
             master=self._tab_view.tab("  Proxy  "),
             proxy=self.proxy,
             on_send_to_repeater=self.switch_to_repeater,
+            on_send_to_intruder=self.switch_to_intruder,
         )
         self._proxy_tab.pack(fill="both", expand=True)
 

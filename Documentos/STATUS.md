@@ -1,4 +1,4 @@
-# 📊 STATUS DEL PROYECTO — Mini-Burp Suite
+# 📊 STATUS DEL PROYECTO — NetLens
 **Materia:** Ingeniería de Software 2  
 **Última actualización:** 2026-04-20  
 **Stack:** Python 3.x · socket · threading · CustomTkinter · requests
@@ -155,20 +155,26 @@ intruder.run(payloads=payloads, on_result=mi_callback, threads=5)  # CU-10
 
 ---
 
-## 🔴 Módulo D — Reporting & Analysis
-> Integrado en `logic/scanner.py` + `logic/utils.py` (planificados)
+## 🟢 Módulo D — Reporting & Analysis
+> Integrado en `logic/scanner.py`, `logic/exporter.py` y `gui/reporting_tab.py`
 
 | CU | Descripción | Estado |
 |---|---|---|
-| CU-11 | Detección Pasiva (errores 500, cabeceras inseguras) | ❌ No iniciado |
-| CU-12 | Exportación de Resultados a informe técnico | ❌ No iniciado |
+| CU-11 | Detección Pasiva (errores 500, cabeceras inseguras, llaves privadas) | ✅ Completado |
+| CU-12 | Exportación de Resultados a informe técnico (HTML y PDF) | ✅ Completado |
 
-**Pendiente implementar:**
-- [ ] Análisis de respuestas para flags de seguridad (`X-Frame-Options`, `CSP`, etc.)
-- [ ] Detección de errores de servidor (HTTP 500) como indicadores de SQLi
-- [ ] Generador de informe en `/reports/`
+**Completado:**
+- [x] Análisis de respuestas para flags de seguridad (`X-Frame-Options`, `CSP`, etc.)
+- [x] Detección de errores de servidor (HTTP 500) como indicadores de SQLi
+- [x] Detección de fugas de llaves privadas y errores de DB en el cuerpo (`response_body`)
+- [x] Generador de reportes visuales dinámicos (`ReportingTab`) con agrupación
+- [x] Exportador de reportes técnicos a formato HTML (Dark Mode) y PDF (`fpdf2`)
 
 ---
+
+
+
+
 
 ## 📁 Estructura de Archivos
 
@@ -303,6 +309,6 @@ Ran 50 tests in 0.04s — OK ✅
 1. ✅ [Módulo A] CORE y GUI de intercepción completados
 2. ✅ [Módulo B] Repeater con panel dual Request/Response implementado
 3. ✅ [Módulo C] Intruder con fuzzing, payloads y tabla de resultados implementado
-4.    [Módulo D] Implementar logic/scanner.py: detección pasiva de cabeceras inseguras (CU-11)
-5.    [Módulo D] Generador de informes en /reports/ con export HTML/PDF (CU-12)
+4. ✅ [Módulo D] Detección pasiva de cabeceras inseguras (CU-11)
+5. ✅ [Módulo D] Generador de informes en /reports/ con export HTML/PDF (CU-12)
 ```

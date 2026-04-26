@@ -94,7 +94,7 @@ class IntruderTab(ctk.CTkFrame):
         # Botón Attack
         self._btn_attack = ctk.CTkButton(
             bar,
-            text="💥  Attack",
+            text="💥  Atacar",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=ACCENT_RED,
             hover_color="#da3633",
@@ -107,7 +107,7 @@ class IntruderTab(ctk.CTkFrame):
         # Botón Stop
         self._btn_stop = ctk.CTkButton(
             bar,
-            text="⏹  Stop",
+            text="⏹  Detener",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=BG_HOVER,
             hover_color="#373e47",
@@ -139,7 +139,7 @@ class IntruderTab(ctk.CTkFrame):
 
         # Timeout
         ctk.CTkLabel(
-            bar, text="Timeout (s):",
+            bar, text="Tiempo límite (s):",
             font=ctk.CTkFont(size=11), text_color=TEXT_MUTED,
         ).pack(side="left", padx=(10, 4))
 
@@ -200,7 +200,7 @@ class IntruderTab(ctk.CTkFrame):
         hdr.pack_propagate(False)
 
         ctk.CTkLabel(
-            hdr, text="📝  Template (petición con §marcadores§)",
+            hdr, text="📝  Plantilla (petición con §marcadores§)",
             font=ctk.CTkFont(size=LABEL_FONT_SZ, weight="bold"),
             text_color=TEXT_MUTED,
         ).pack(side="left")
@@ -327,7 +327,7 @@ class IntruderTab(ctk.CTkFrame):
         ).pack(side="right", padx=(4, 0))
 
         ctk.CTkButton(
-            hdr, text="💾  Export CSV", width=110, height=28,
+            hdr, text="💾  Exportar CSV", width=110, height=28,
             fg_color=BG_HOVER, hover_color="#373e47",
             text_color=TEXT_MUTED, font=ctk.CTkFont(size=11),
             corner_radius=5, command=self._export_csv,
@@ -529,7 +529,7 @@ class IntruderTab(ctk.CTkFrame):
     def _on_attack_done(self) -> None:
         """Restaura la UI tras finalizar o detener el ataque."""
         self._attacking = False
-        self._btn_attack.configure(state="normal", text="💥  Attack")
+        self._btn_attack.configure(state="normal", text="💥  Atacar")
         self._btn_stop.configure(state="disabled")
 
         total   = len(self._results)
