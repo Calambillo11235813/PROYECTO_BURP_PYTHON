@@ -32,3 +32,7 @@ Thumbs.db
 # Certificados MITM generados (ca.key es una clave privada, NUNCA versionar)
 certs/
 
+
+#variable de entorno   
+.env
+

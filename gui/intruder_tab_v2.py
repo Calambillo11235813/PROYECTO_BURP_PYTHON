@@ -24,6 +24,7 @@ import customtkinter as ctk
 
 from intruder import Intruder, IntruderResult
 from .utils import apply_syntax_highlighting
+from logic.ai_copilot import GeminiCopilot, AICopilotError
 from .colors import (
     ACCENT_BLUE,
     ACCENT_GREEN,
@@ -51,9 +52,10 @@ class IntruderTab(ctk.CTkFrame):
 
     def __init__(self, master: tk.Widget) -> None:
         super().__init__(master, fg_color="transparent")
-        self._payloads     : list[str]                   = []
-        self._intruder     : Intruder                    = Intruder()
-        self._result_queue : queue.Queue[IntruderResult] = queue.Queue()
+        self._payloads        : list[str]                   = []
+        self._intruder        : Intruder                    = Intruder()
+        self._result_queue    : queue.Queue[IntruderResult] = queue.Queue()
+        self._original_request: str                         = ""
         self._build_attack_bar()
         self._build_main_pane()
 
@@ -84,6 +86,16 @@ class IntruderTab(ctk.CTkFrame):
             state="disabled", command=self._stop_attack,
         )
         self._btn_stop.pack(side="left", padx=(0, 8), pady=9)
+
+        self._btn_reset = ctk.CTkButton(
+            bar, text="🔄  Restablecer",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=BG_DARK, hover_color=BG_HOVER,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_MUTED, width=118, height=32, corner_radius=6,
+            command=self._on_reset,
+        )
+        self._btn_reset.pack(side="left", padx=(0, 8), pady=9)
 
         tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", pady=10)
 
@@ -189,6 +201,35 @@ class IntruderTab(ctk.CTkFrame):
         self._results_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y", padx=(0, 4))
         self._results_tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 4))
+
+        # ── Tags de color por rango de status ───────────────────────────────
+        # Configurados UNA sola vez aquí para no llamarlos en cada fila.
+        # background sutil para dark mode; foreground de alto contraste.
+        self._results_tree.tag_configure(
+            "status_2xx",
+            background="#0d2818",      # verde muy oscuro
+            foreground=ACCENT_GREEN,   # #3fb950
+        )
+        self._results_tree.tag_configure(
+            "status_3xx",
+            background="#0d1f35",      # azul marino oscuro
+            foreground="#58a6ff",      # azul clásico GitHub
+        )
+        self._results_tree.tag_configure(
+            "status_4xx",
+            background="#2b1d0e",      # naranja muy oscuro
+            foreground=ACCENT_YELLOW,  # #e3b341
+        )
+        self._results_tree.tag_configure(
+            "status_5xx",
+            background="#2d0f0f",      # rojo muy oscuro
+            foreground=ACCENT_RED,     # #f85149
+        )
+        self._results_tree.tag_configure(
+            "status_err",
+            background=BG_SECONDARY,
+            foreground=TEXT_MUTED,     # gris neutro para errores de red
+        )
 
     # ── Construcción del CTkTabview principal ──────────────────────────────────
 
@@ -417,6 +458,19 @@ class IntruderTab(ctk.CTkFrame):
             width=90, **_sec_btn,
         ).pack(side="left")
 
+        # Botón IA — generacion automática de payloads con Gemini
+        self._btn_ai = ctk.CTkButton(
+            section,
+            text="✨  Generar con IA",
+            command=self._generate_ai_payloads,
+            height=34, corner_radius=6,
+            fg_color="#3b1f6b", hover_color="#4e2a90",
+            border_color="#a78bfa", border_width=1,
+            text_color="#a78bfa",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self._btn_ai.pack(fill="x", padx=12, pady=(2, 10))
+
         # Etiqueta + Textbox de previsualización (solo lectura)
         ctk.CTkLabel(
             section,
@@ -445,14 +499,33 @@ class IntruderTab(ctk.CTkFrame):
     def load_request(self, raw: str) -> None:
         """
         Carga una petición HTTP en el editor de plantilla.
+        Guarda una copia en _original_request para poder restablecer.
 
         Args:
             raw: Texto completo de la petición HTTP.
         """
+        self._original_request = raw
         if hasattr(self, "_template_box"):
             self._template_box.delete("1.0", "end")
             self._template_box.insert("1.0", raw)
             apply_syntax_highlighting(self._template_box)
+
+    def _on_reset(self) -> None:
+        """Restaura el editor de plantilla a la petición original cargada."""
+        if self._original_request:
+            if hasattr(self, "_template_box"):
+                self._template_box.delete("1.0", "end")
+                self._template_box.insert("1.0", self._original_request)
+                apply_syntax_highlighting(self._template_box)
+            self._attack_status_lbl.configure(
+                text="🔄  Plantilla restablecida al estado original.",
+                text_color=TEXT_MUTED,
+            )
+        else:
+            self._attack_status_lbl.configure(
+                text="⚠  No hay petición original guardada. Envía una desde el Proxy.",
+                text_color=ACCENT_YELLOW,
+            )
 
     # ── Callbacks: marcadores § ────────────────────────────────────────────────
 
@@ -479,7 +552,72 @@ class IntruderTab(ctk.CTkFrame):
     def _refresh_template(self) -> None:
         """Placeholder: actualizará el resaltado de marcadores (iteración futura)."""
 
-    # ── Callbacks: payloads ───────────────────────────────────────────────
+    # ── Copiloto IA (CU-14) ────────────────────────────────────────────────────
+
+    def _generate_ai_payloads(self) -> None:
+        """
+        Lanza un hilo daemon que llama a GeminiCopilot y añade los payloads
+        generados a self._payloads de forma 100 % thread-safe con .after().
+        """
+        template = self._template_box.get("1.0", "end-1c").strip()
+        if not template:
+            self._attack_status_lbl.configure(
+                text="⚠  Escribe una plantilla en Posiciones primero.",
+                text_color=ACCENT_YELLOW,
+            )
+            return
+
+        # Bloquear el botón mientras Gemini trabaja
+        self._btn_ai.configure(
+            state="disabled",
+            text="⏳  Consultando a Gemini...",
+            text_color=TEXT_MUTED,
+        )
+
+        def _worker() -> None:
+            """Hilo daemon: llama a Gemini y despacha el resultado al hilo principal."""
+            try:
+                copilot  = GeminiCopilot()
+                payloads = copilot.generate_intruder_payloads(template)
+                self.after(0, lambda p=payloads: _on_success(p))
+            except AICopilotError as exc:
+                self.after(0, lambda e=exc: _on_error(str(e)))
+            except Exception as exc:        # pylint: disable=broad-except
+                self.after(0, lambda e=exc: _on_error(f"Error inesperado: {e}"))
+
+        def _on_success(payloads: list[str]) -> None:
+            """Recibe la lista en el hilo principal y actualiza la UI."""
+            if payloads:
+                self._payloads.extend(payloads)
+                self._refresh_payload_preview()
+                self._attack_status_lbl.configure(
+                    text=f"✨  Gemini generó {len(payloads)} payloads.",
+                    text_color=ACCENT_GREEN,
+                )
+            else:
+                self._attack_status_lbl.configure(
+                    text="⚠  Gemini no devolvió payloads válidos. Inténtalo de nuevo.",
+                    text_color=ACCENT_YELLOW,
+                )
+            _restore_button()
+
+        def _on_error(msg: str) -> None:
+            self._attack_status_lbl.configure(
+                text=f"❌  {msg[:90]}",
+                text_color=ACCENT_RED,
+            )
+            _restore_button()
+
+        def _restore_button() -> None:
+            self._btn_ai.configure(
+                state="normal",
+                text="✨  Generar con IA",
+                text_color="#a78bfa",
+            )
+
+        threading.Thread(target=_worker, daemon=True, name="GeminiCopilot").start()
+
+    # ── Callbacks: payloads ───────────────────────────────────────────────────
 
     def _load_payloads(self) -> None:
         """Abre un .txt y carga cada línea como payload en el preview."""
@@ -594,26 +732,37 @@ class IntruderTab(ctk.CTkFrame):
         self.after(100, self._poll_results)    # seguir sondeando
 
     def _insert_result_row(self, r: IntruderResult) -> None:
-        """Inserta una fila en la tabla de resultados con colores por status."""
-        status_text = str(r.status_code) if r.status_code else f"ERR: {r.error or '?'[:20]}"
-        tag = (
-            "ok"       if 200 <= r.status_code < 300 else
-            "redirect" if 300 <= r.status_code < 400 else
-            "client"   if 400 <= r.status_code < 500 else
-            "server"   if 500 <= r.status_code < 600 else
-            "error"
-        )
-        self._results_tree.insert(
+        """Inserta una fila con el tag de color correspondiente al rango de status."""
+        if r.status_code:
+            status_text = str(r.status_code)
+            code = r.status_code
+            if 200 <= code < 300:
+                tag = "status_2xx"
+            elif 300 <= code < 400:
+                tag = "status_3xx"
+            elif 400 <= code < 500:
+                tag = "status_4xx"
+            elif 500 <= code < 600:
+                tag = "status_5xx"
+            else:
+                tag = "status_err"
+        else:
+            status_text = f"ERR: {(r.error or '?')[:18]}"
+            tag = "status_err"
+
+        row_id = self._results_tree.insert(
             "", "end",
-            values=(r.index, r.payload[:80], status_text,
-                    r.length, f"{r.duration_ms:.0f}"),
+            values=(
+                r.index,
+                r.payload[:80],
+                status_text,
+                r.length,
+                f"{r.duration_ms:.0f}",
+            ),
             tags=(tag,),
         )
-        self._results_tree.tag_configure("ok",       foreground=ACCENT_GREEN)
-        self._results_tree.tag_configure("redirect", foreground=ACCENT_BLUE)
-        self._results_tree.tag_configure("client",   foreground=ACCENT_YELLOW)
-        self._results_tree.tag_configure("server",   foreground=ACCENT_RED)
-        self._results_tree.tag_configure("error",    foreground=TEXT_MUTED)
+        # Auto-scroll al último resultado si el usuario está al fondo
+        self._results_tree.see(row_id)
 
     def _on_attack_done(self) -> None:
         """Restaura la UI cuando el ataque finaliza o se detiene."""

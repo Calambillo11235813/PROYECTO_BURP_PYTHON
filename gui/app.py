@@ -23,6 +23,7 @@ from .repeater_tab import RepeaterTab
 from .intruder_tab_v2 import IntruderTab
 from .reporting_tab import ReportingTab
 from .header import HeaderFrame
+from .settings_dialog import SettingsDialog
 from .colors import (
     BG_DARK, BG_SECONDARY, ACCENT_BLUE, ACCENT_GREEN,
     ACCENT_RED, TEXT_PRIMARY, TEXT_MUTED, BORDER,
@@ -82,6 +83,23 @@ class App(ctk.CTk):
             on_tab_select=self._on_tab_select
         )
         self._header.pack(fill="x", side="top")
+
+        # Botón de ajustes flotante en la esquina superior derecha del header
+        self._btn_settings = ctk.CTkButton(
+            self._header,
+            text="⚙️  Ajustes",
+            command=self._open_settings,
+            width=100, height=28, corner_radius=6,
+            fg_color="transparent", hover_color=BG_SECONDARY,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_MUTED,
+            font=ctk.CTkFont(size=11),
+        )
+        self._btn_settings.place(relx=1.0, rely=0.5, anchor="e", x=-16)
+
+    def _open_settings(self) -> None:
+        """Abre el dialogo modal de Ajustes."""
+        SettingsDialog(parent=self)
 
     def _on_tab_select(self, tab_name: str) -> None:
         """Callback al hacer clic en las pestañas del Header."""
