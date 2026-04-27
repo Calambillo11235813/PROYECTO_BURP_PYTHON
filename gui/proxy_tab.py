@@ -359,18 +359,7 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         ctk.CTkButton(
             add_row,
             text="Eliminar seleccionada",
-            width=150,
-            height=32,
-            fg_color=BG_HOVER,
-            hover_color="#373e47",
-            text_color=TEXT_MUTED,
-            command=self._on_remove_selected_filter,
-        ).pack(side="left", padx=(0, 12), pady=8)
-
-        ctk.CTkButton(
-            add_row,
-            text="Eliminar seleccionada",
-            width=150,
+            width=180,
             height=32,
             fg_color=BG_HOVER,
             hover_color="#373e47",
@@ -434,9 +423,9 @@ class ProxyTab(ProxyEventsMixin, ctk.CTkFrame):
         ).pack(side="left", padx=(8, 8), pady=8)
 
         ctk.CTkButton(
-            add_path_row, text="Eliminar seleccionada", width=150, height=32, fg_color=BG_HOVER, hover_color="#373e47",
+            add_path_row, text="Eliminar seleccionada", width=180, height=32, fg_color=BG_HOVER, hover_color="#373e47",
             text_color=TEXT_MUTED, command=self._on_remove_selected_path,
-        ).pack(side="left", padx=(0, 12), pady=8)
+        ).pack(side="left", padx=(8, 12), pady=8)
 
         paths_list_frame = tk.Frame(tab_paths, bg=BG_DARK, highlightthickness=1, highlightbackground=BORDER)
         paths_list_frame.pack(fill="both", expand=True)

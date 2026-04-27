@@ -7,18 +7,14 @@ el análisis de bloqueos WAF y sugerencia de payloads.
 
 from __future__ import annotations
 
-import os
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
 try:
     import google.generativeai as genai
+    _GENAI_AVAILABLE = True
 except ImportError:
-    genai = None
+    genai = None  # type: ignore[assignment]
+    _GENAI_AVAILABLE = False
+
+from logic.config_manager import ConfigManager
 
 # ── Configuración de Modelos ──────────────────────────────────────────────────
 AVAILABLE_MODELS = [
@@ -55,13 +51,14 @@ class GeminiResponseError(GeminiEngineError):
 class GeminiEngine:
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         self.model = model
-        self._api_key = os.environ.get("GEMINI_API_KEY", "")
-        if self._api_key and genai:
-            genai.configure(api_key=self._api_key)
+
+    def _get_api_key(self) -> str:
+        """Obtiene la clave en tiempo real desde ConfigManager."""
+        return ConfigManager.instance().get_api_key()
 
     def is_available(self) -> bool:
         """Verifica si la API de Gemini está lista para usarse."""
-        return bool(self._api_key and genai)
+        return bool(self._get_api_key() and _GENAI_AVAILABLE)
 
     def get_installed_models(self) -> list[str]:
         """
@@ -81,11 +78,16 @@ class GeminiEngine:
         Envía la petición bloqueada a Gemini y retorna un JSON string 
         con técnicas de evasión WAF.
         """
-        if not self.is_available():
+        api_key = self._get_api_key()
+
+        if not _GENAI_AVAILABLE or not api_key:
             raise GeminiConfigError(
                 "La API de Gemini no está configurada.\n"
-                "Asegúrate de definir la variable de entorno GEMINI_API_KEY y de instalar 'google-generativeai'."
+                "Asegúrate de ir a Ajustes (⚙️) y guardar tu API Key."
             )
+
+        # Configuración en caliente (on-the-fly) para asegurar que usa la clave actual
+        genai.configure(api_key=api_key)
 
         target_model_name = model_override if model_override else self.model
         prompt = self._build_prompt(request_text, response_text)

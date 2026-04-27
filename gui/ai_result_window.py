@@ -23,7 +23,7 @@ from typing import Callable
 import customtkinter as ctk
 
 from .colors import (
-    ACCENT_BLUE, ACCENT_GREEN, ACCENT_YELLOW,
+    ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW,
     BG_DARK, BG_SECONDARY, BORDER,
     TEXT_MUTED, TEXT_PRIMARY,
 )
@@ -223,40 +223,62 @@ class AIResultWindow(ctk.CTkToplevel):
         return techniques
 
     def _render_plain_text(self, text: str) -> None:
-        """Tarjeta de Fallback de Emergencia cuando el parseo falla."""
-        card = ctk.CTkFrame(self._scroll_frame, fg_color=BG_SECONDARY, corner_radius=8)
+        """
+        Tarjeta de error/fallback cuando el parseo JSON falla o se recibe
+        un mensaje de error contextualizado.
+
+        Usa un fondo rojo tenue para diferenciarse visualmente de las tarjetas
+        de sugerencias exitosas.
+        """
+        # Detectar si el contenido es un error para usar estilo rojo
+        text_lo = text.lower()
+        is_error = any(k in text_lo for k in (
+            "error", "invalidada", "configurada", "conexión",
+            "revocada", "403", "blocked",
+        ))
+
+        card_bg   = "#2d0f0f" if is_error else BG_SECONDARY
+        title_txt = "❌  Error del Copiloto de IA" if is_error else "⚠️  Respuesta sin formato estándar"
+        title_clr = ACCENT_RED if is_error else ACCENT_YELLOW
+
+        card = ctk.CTkFrame(self._scroll_frame, fg_color=card_bg, corner_radius=8)
         card.pack(fill="x", padx=10, pady=6)
-        
-        # Header de emergencia
+
+        # Header
         header = ctk.CTkFrame(card, fg_color="transparent")
         header.pack(fill="x", padx=10, pady=(8, 4))
-        
+
         ctk.CTkLabel(
-            header, text="⚠️  Respuesta sin formato estándar",
+            header, text=title_txt,
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color=ACCENT_YELLOW, anchor="w", justify="left"
+            text_color=title_clr, anchor="w", justify="left",
         ).pack(side="left", fill="x", expand=True)
-        
+
         ctk.CTkButton(
             header, text="📋 Copiar al Portapapeles",
             font=ctk.CTkFont(size=11, weight="bold"),
             fg_color=ACCENT_BLUE, hover_color="#1a5fb4",
-            width=150, height=26, corner_radius=4,
-            command=lambda: self._copy_to_clipboard(text)
+            width=155, height=26, corner_radius=4,
+            command=lambda: self._copy_to_clipboard(text),
         ).pack(side="right")
-        
+
         # Separador
-        tk.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=10, pady=4)
-        
-        # Área de texto
+        sep_color = "#5a1a1a" if is_error else BORDER
+        tk.Frame(card, bg=sep_color, height=1).pack(fill="x", padx=10, pady=4)
+
+        # Área de texto (sin fondo para heredar el del card)
         box = ctk.CTkTextbox(
-            card, font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color="transparent", text_color=TEXT_PRIMARY,
-            wrap="word", height=250
+            card,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            fg_color="transparent",
+            text_color="#f0a0a0" if is_error else TEXT_PRIMARY,
+            wrap="word",
+            height=220,
         )
         box.pack(fill="both", expand=True, padx=8, pady=(0, 10))
         box.insert("1.0", text)
         box.configure(state="disabled")
+
 
     def _copy_to_clipboard(self, text: str) -> None:
         """Copia el texto al portapapeles del sistema."""

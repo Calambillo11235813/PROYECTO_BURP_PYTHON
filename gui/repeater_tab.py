@@ -7,7 +7,7 @@ Responsabilidades:
     - Mostrar un panel de dos columnas: Request (editable) | Response (solo lectura).
     - Botón 'Send' que ejecuta Repeater.send() en un hilo background para
       no congelar la interfaz mientras espera la respuesta del servidor.
-    - Botón 'Ask AI (Bypass WAF)' que consulta al motor de IA local (Ollama)
+    - Botón 'Ask AI (Bypass WAF)' que consulta al motor de IA (Gemini)
       para obtener sugerencias de evasión de WAF cuando la respuesta es un
       bloqueo (403, 429, etc.) — CU-13 Módulo E.
     - load_request(raw): método público llamado desde ProxyTab cuando
@@ -541,12 +541,14 @@ class RepeaterTab(ctk.CTkFrame):
 
     def _on_ai_error(self, title: str, detail: str) -> None:
         """
-        Callback en el hilo principal: muestra el error de la IA en la status bar
-        y en una ventana modal informativa.
+        Callback en el hilo principal: muestra el error de Gemini de forma
+        contextual, con acciones especificas segun el tipo de fallo.
 
-        Args:
-            title  (str): Título corto del error (para el botón y la barra).
-            detail (str): Descripción técnica completa del error.
+        Casos detectados:
+            - Clave filtrada / revocada por Google (HTTP 403 + 'leaked').
+            - Clave no configurada.
+            - Error de red / conexion.
+            - Error generico de la API.
         """
         self._asking_ai = False
         self._btn_ai.configure(
@@ -561,18 +563,64 @@ class RepeaterTab(ctk.CTkFrame):
             text_color=ACCENT_RED,
         )
 
-        # Mostrar el detalle del error en la misma ventana modal reutilizando
-        # AIResultWindow — el mensaje de error es suficientemente informativo.
-        error_message = (
-            f"⚠️  {title}\n\n"
-            f"{detail}\n\n"
-            "─────────────────────────────\n"
-            "Acciones recomendadas:\n"
-            "  1. Verifica que Ollama está corriendo:  ollama serve\n"
-            "  2. Verifica que el modelo está instalado: ollama pull llama3\n"
-            "  3. Comprueba que tienes al menos 8 GB de RAM libre."
-        )
-        
+        detail_lo = detail.lower()
+
+        # ── Caso 1: clave filtrada / revocada por Google ───────────────────────
+        if "403" in detail_lo and any(
+            k in detail_lo for k in ("leaked", "revoked", "api_key", "invalid")
+        ):
+            error_message = (
+                "🚫  API Key invalidada por Google\n\n"
+                "Tu clave ha sido detectada como comprometida o revocada "
+                "y Google la ha desactivado por motivos de seguridad.\n\n"
+                "─────────────────────────────\n"
+                "Acciones recomendadas:\n"
+                "  1. Abre  ⚙️ Ajustes  y elimina la clave actual.\n"
+                "  2. Genera una nueva en:  aistudio.google.com  → Get API Key\n"
+                "  3. Pégala en Ajustes y pulsa  💾 Guardar.\n\n"
+                f"Detalle técnico: {detail}"
+            )
+
+        # ── Caso 2: clave no configurada ──────────────────────────────────────
+        elif any(k in detail_lo for k in ("no configurada", "api key", "not configured")):
+            error_message = (
+                "🔑  API Key no configurada\n\n"
+                "NetLens necesita una clave de Google Gemini para usar "
+                "el Copiloto de IA.\n\n"
+                "─────────────────────────────\n"
+                "Cómo configurarla:\n"
+                "  1. Haz clic en  ⚙️ Ajustes  (esquina superior derecha).\n"
+                "  2. Obtén una clave gratuita en:  aistudio.google.com\n"
+                "  3. Pégala en el campo y pulsa  💾 Guardar."
+            )
+
+        # ── Caso 3: error de red / conexion ───────────────────────────────────
+        elif any(k in detail_lo for k in (
+            "connection", "timeout", "network", "unreachable", "socket", "connexion"
+        )):
+            error_message = (
+                "🔌  Error de conexión con Google Gemini\n\n"
+                "No se pudo establecer comunicación con la API de Google.\n\n"
+                "─────────────────────────────\n"
+                "Verifica:\n"
+                "  1. Que tienes conexión a Internet activa.\n"
+                "  2. Estado de Google Cloud:  status.cloud.google.com\n"
+                "  3. Que ningún firewall bloquea:  generativelanguage.googleapis.com\n\n"
+                f"Detalle técnico: {detail}"
+            )
+
+        # ── Caso 4: error genérico de la API ──────────────────────────────────
+        else:
+            error_message = (
+                f"⚠️  {title}\n\n"
+                f"{detail}\n\n"
+                "─────────────────────────────\n"
+                "Si el problema persiste:\n"
+                "  • Revisa tu clave en  ⚙️ Ajustes.\n"
+                "  • Consulta la documentación en  ai.google.dev\n"
+                "  • Usa 'Copiar al Portapapeles' para reportar el error técnico."
+            )
+
         if self.ai_window and self.ai_window.winfo_exists():
             self.ai_window.update_results(error_message, title)
             self.ai_window.focus_set()
@@ -583,6 +631,7 @@ class RepeaterTab(ctk.CTkFrame):
                 request_summary=title,
                 on_apply_callback=self.apply_ai_payload,
             )
+
 
     def _on_reset(self) -> None:
         """

@@ -73,17 +73,6 @@ class GeminiCopilot:
                 "Ejecuta: pip install google-generativeai"
             )
 
-        self._api_key: str = ConfigManager.instance().get_api_key()
-
-        if not self._api_key:
-            raise AICopilotConfigError(
-                "API Key no configurada.\n"
-                "Ve a Ajustes (icono en la barra superior) e introduce "
-                "tu clave de Google Gemini para usar el Copiloto de IA."
-            )
-
-        genai.configure(api_key=self._api_key)
-
     # ── API publica ────────────────────────────────────────────────────────────
 
     def generate_intruder_payloads(self, template: str) -> list[str]:
@@ -103,6 +92,18 @@ class GeminiCopilot:
             AICopilotConfigError: Si falta la API key o la libreria.
             AICopilotNetworkError: Si ocurre cualquier error de red o de la API.
         """
+        api_key = ConfigManager.instance().get_api_key()
+
+        if not api_key:
+            raise AICopilotConfigError(
+                "API Key no configurada.\n"
+                "Ve a Ajustes (icono en la barra superior) e introduce "
+                "tu clave de Google Gemini para usar el Copiloto de IA."
+            )
+
+        # Configuración on-the-fly para tomar cambios de clave sin reiniciar
+        genai.configure(api_key=api_key)
+
         prompt = self._build_prompt(template)
 
         try:
