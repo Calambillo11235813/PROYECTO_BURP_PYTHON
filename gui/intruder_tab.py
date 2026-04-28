@@ -33,6 +33,7 @@ from typing import Optional
 import customtkinter as ctk
 
 from intruder import Intruder, IntruderResult
+from core.paths import resource_path
 from .colors import (
     ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW,
     BG_DARK, BG_HOVER, BG_ROW_ODD, BG_SECONDARY,
@@ -43,8 +44,8 @@ from .colors import (
 EDITOR_FONT   = ("Consolas", 12)
 LABEL_FONT_SZ = 12
 
-# Directorio de payloads incluidos en el proyecto
-_PAYLOADS_DIR = Path(__file__).parent.parent / "payloads"
+# Directorio de payloads incluidos en el proyecto (soporta PyInstaller onefile)
+_PAYLOADS_DIR = resource_path("payloads")
 
 
 class IntruderTab(ctk.CTkFrame):

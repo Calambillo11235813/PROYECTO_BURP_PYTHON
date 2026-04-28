@@ -29,11 +29,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-# ── Rutas y constantes ────────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).parent.parent
-CERTS_DIR     = _PROJECT_ROOT / "certs"
-CA_CERT_PATH  = CERTS_DIR / "ca.crt"
-CA_KEY_PATH   = CERTS_DIR / "ca.key"
+from .paths import is_frozen, project_root, user_data_dir
 
 CA_COMMON_NAME   = "Mini-Burp Suite CA"
 CA_ORGANIZATION  = "Mini-Burp Suite — SW2 2026"
@@ -55,7 +51,11 @@ class CertsManager:
     """
 
     def __init__(self) -> None:
-        CERTS_DIR.mkdir(parents=True, exist_ok=True)
+        self._certs_dir = self._resolve_certs_dir()
+        self._ca_cert_path = self._certs_dir / "ca.crt"
+        self._ca_key_path = self._certs_dir / "ca.key"
+
+        self._certs_dir.mkdir(parents=True, exist_ok=True)
         self._lock:  threading.RLock = threading.RLock()
         self._cache: dict[str, tuple[Path, Path]] = {}
         self._ca_cert, self._ca_key = self._load_or_create_ca()
@@ -65,7 +65,23 @@ class CertsManager:
     @property
     def ca_cert_path(self) -> Path:
         """Ruta al cert raíz de la CA (el que el usuario debe instalar)."""
-        return CA_CERT_PATH
+        return self._ca_cert_path
+
+    @staticmethod
+    def _resolve_certs_dir() -> Path:
+        """Elige un directorio estable para persistir la CA y certs de dominio.
+
+        - En PyInstaller (onefile), NO usar recursos empaquetados porque se
+          extraen a un directorio temporal distinto en cada ejecución.
+        - En desarrollo, preferimos el certs/ del repo si existe.
+        """
+        if is_frozen():
+            return user_data_dir() / "certs"
+
+        repo_dir = project_root() / "certs"
+        if repo_dir.exists():
+            return repo_dir
+        return user_data_dir() / "certs"
 
     def get_domain_cert(self, hostname: str) -> tuple[Path, Path]:
         """
@@ -93,7 +109,7 @@ class CertsManager:
         self,
     ) -> tuple[x509.Certificate, rsa.RSAPrivateKey]:
         """Lee la CA de disco o la genera si no existe."""
-        if CA_CERT_PATH.exists() and CA_KEY_PATH.exists():
+        if self._ca_cert_path.exists() and self._ca_key_path.exists():
             return self._load_ca()
         return self._create_ca()
 
@@ -101,11 +117,11 @@ class CertsManager:
         self,
     ) -> tuple[x509.Certificate, rsa.RSAPrivateKey]:
         """Deserializa ca.crt y ca.key desde PEM."""
-        cert = x509.load_pem_x509_certificate(CA_CERT_PATH.read_bytes())
+        cert = x509.load_pem_x509_certificate(self._ca_cert_path.read_bytes())
         key  = serialization.load_pem_private_key(
-            CA_KEY_PATH.read_bytes(), password=None,
+            self._ca_key_path.read_bytes(), password=None,
         )
-        print(f"[CA] Certificado raíz cargado: {CA_CERT_PATH}")
+        print(f"[CA] Certificado raíz cargado: {self._ca_cert_path}")
         return cert, key  # type: ignore[return-value]
 
     def _create_ca(
@@ -147,8 +163,8 @@ class CertsManager:
             .sign(key, hashes.SHA256())
         )
 
-        CA_CERT_PATH.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-        CA_KEY_PATH.write_bytes(
+        self._ca_cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        self._ca_key_path.write_bytes(
             key.private_bytes(
                 serialization.Encoding.PEM,
                 serialization.PrivateFormat.TraditionalOpenSSL,
@@ -158,7 +174,7 @@ class CertsManager:
 
         print("\n" + "═" * 60)
         print("  [CA] ¡Certificado raíz generado!")
-        print(f"  Archivo: {CA_CERT_PATH}")
+        print(f"  Archivo: {self._ca_cert_path}")
         print("  Instálalo en tu navegador para interceptar HTTPS:")
         print("  Edge/Chrome → Configuración → Certificados → Autoridades")
         print("═" * 60 + "\n")
@@ -181,8 +197,8 @@ class CertsManager:
         """
         # Sanitizar para usarlo como nombre de archivo (sin * ni :)
         safe_name = hostname.replace("*", "wildcard").replace(":", "_")
-        cert_path = CERTS_DIR / f"{safe_name}.crt"
-        key_path  = CERTS_DIR / f"{safe_name}.key"
+        cert_path = self._certs_dir / f"{safe_name}.crt"
+        key_path  = self._certs_dir / f"{safe_name}.key"
 
         # Reutilizar cert existente en disco (de sesiones anteriores)
         if cert_path.exists() and key_path.exists():

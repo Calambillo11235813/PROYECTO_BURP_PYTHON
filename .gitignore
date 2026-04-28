@@ -36,3 +36,11 @@ certs/
 #variable de entorno   
 .env
 
+# Builds / installers (no versionar artefactos)
+build/
+dist/
+*.exe
+*.rar
+*.pkg
+*.iss
+

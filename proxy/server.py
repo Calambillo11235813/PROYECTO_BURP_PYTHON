@@ -23,6 +23,7 @@ import threading
 from pathlib import Path
 
 from core.certs_manager import CertsManager
+from core.paths import is_frozen, project_root, user_data_dir
 from .host_filter import HostFilter
 from .handler import ConnectionHandler, InterceptController
 from .history import History
@@ -90,9 +91,13 @@ class ProxyServer:
         )
         self._server_socket: socket.socket | None = None
         self._running  = False
-        self._filter_config_path = (
-            Path(__file__).resolve().parent.parent / FILTER_CONFIG_FILE
-        )
+        if is_frozen():
+            # Persistente y editable por el usuario
+            user_data_dir().mkdir(parents=True, exist_ok=True)
+            self._filter_config_path = user_data_dir() / FILTER_CONFIG_FILE
+        else:
+            # Desarrollo: mantener el archivo del repo
+            self._filter_config_path = project_root() / FILTER_CONFIG_FILE
         self.load_filter_config()
 
     # ── API de filtrado de host ─────────────────────────────────────────────
